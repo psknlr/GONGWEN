@@ -446,7 +446,9 @@ class Compiler:
         for att in self.ir.attachments:
             par = self.para()
             par.add_run().add_break(WD_BREAK.PAGE)
-            self.para(f"附件{att.seq}", font=el["label_font"], size=el["size"])
+            # 只有一个附件时附件说明不编顺序号，附件页标识相应为“附件”（7.3.4、7.3.7）
+            label = "附件" if len(self.ir.attachments) == 1 and len(self.ir.attachment_notes) <= 1 else f"附件{att.seq}"
+            self.para(label, font=el["label_font"], size=el["size"])
             self.blank(1)
             for line in split_title(att.title, self.p.el("title")["max_chars_per_line"]):
                 self.para(line, font="xiaobiaosong", size=self.p.el("title")["size"], align=WD_ALIGN_PARAGRAPH.CENTER)

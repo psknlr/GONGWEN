@@ -170,7 +170,7 @@ class DocumentIR(GWModel):
             parts.append("、".join(self.recipients) + "：")
         parts.append(self.body_text(include_attachments=False))
         if self.attachment_notes:
-            parts.append("附件：" + "　".join(f"{n.seq}.{n.name}" for n in self.attachment_notes))
+            parts.append("附件：" + "　".join(f"{n.seq}.{n.name}" if len(self.attachment_notes) > 1 else n.name for n in self.attachment_notes))
         parts.extend(self.signature.organs)
         parts.append(self.signature.date)
         if self.note:
@@ -194,7 +194,7 @@ class DocumentIR(GWModel):
             else:
                 out += [b.text(), ""]
         if self.attachment_notes:
-            out += ["附件：" + "；".join(f"{n.seq}.{n.name}" for n in self.attachment_notes), ""]
+            out += ["附件：" + "；".join(f"{n.seq}.{n.name}" if len(self.attachment_notes) > 1 else n.name for n in self.attachment_notes), ""]
         out += [*self.signature.organs, self.signature.date, ""]
         if self.note:
             out += [f"（{self.note}）", ""]

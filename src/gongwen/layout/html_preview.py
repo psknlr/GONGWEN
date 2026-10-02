@@ -102,8 +102,9 @@ def render_document(ir: DocumentIR, flags: dict[str, str] | None = None, label: 
     parts.append('<div class="sig">' + "".join(f"<div>{esc(o)}</div>" for o in ir.signature.organs) + f"<div>{esc(ir.signature.date)}</div></div>")
     if ir.note:
         parts.append(f'<p class="note">（{esc(ir.note.strip("（）"))}）</p>')
+    single = len(ir.attachments) == 1 and len(ir.attachment_notes) <= 1
     for att in ir.attachments:
-        parts.append(f'<div class="att"><p class="flush h1">附件{att.seq}</p><div class="title">{esc(att.title)}</div>{_blocks(att.blocks, flags)}</div>')
+        parts.append(f'<div class="att"><p class="flush h1">{"附件" if single else f"附件{att.seq}"}</p><div class="title">{esc(att.title)}</div>{_blocks(att.blocks, flags)}</div>')
     imp = ir.imprint
     if imp.cc or imp.printer:
         rows = []
