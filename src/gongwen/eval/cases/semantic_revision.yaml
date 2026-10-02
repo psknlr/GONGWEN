@@ -2,7 +2,7 @@
 - id: SR-01
   task_group: multi
   kind: revision
-  title: 关键事实变更联动正文合计与附件表格
+  title: 关键事实变更联动正文合计、请示事项与附件表格
   request: 起草一份向市政府申请基层医疗示范点建设经费的请示
   hints: {recipients: 示例市人民政府, issuer_type: 政府部门}
   materials:
@@ -31,8 +31,8 @@
     fact_changes:
       - {attribute: 设备购置, new_value: 40, reason: 核减}
   expect:
-    draft_contains: [经费合计100万元]
-    draft_not_contains: [经费合计120万元]
+    draft_contains: [经费合计100万元, 拟申请安排经费100万元]
+    draft_not_contains: [经费合计120万元, 拟申请安排经费120万元]
     attachment_table_contains: ["40", "100"]
 
 - id: SR-02
