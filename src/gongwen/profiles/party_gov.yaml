@@ -1,0 +1,20 @@
+# 党政机关：依照《党政机关公文处理工作条例》与 GB/T 9704—2012 执行。
+name: party_gov
+title: 党政机关
+subject_types: [党政机关, 行政机关, 政务部门, 党组织]
+tiaoli_mode: 依照
+allowed_genres: [决议, 决定, 命令（令）, 公报, 公告, 通告, 意见, 通知, 通报, 报告, 请示, 批复, 议案, 函, 纪要]
+format_profile: gbt9704-2012
+office_name: 办公厅（室）
+principal_title: 机关主要负责人
+upper_name: 上级机关
+lower_name: 下级机关
+internal_unit_name: 部门内设机构
+internal_unit_rule: 部门内设机构除办公厅（室）外不得对外正式行文
+review_chain: [起草单位拟稿, 起草单位负责人审核, 办公厅（室）审核, 机关负责人签发]
+unit_procedures: []
+self_reference_patterns: ["我{short}"]
+notes: >-
+  本配置为通用默认值。机关层级、隶属关系和授权情况须在 organs 中如实登记，
+  系统据此判断行文关系；未登记的关系一律标注“待核实”。
+organs: []

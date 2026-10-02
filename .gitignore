@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# 运行数据（任务材料、审计日志、输出文稿）不入库
+.gongwen/
+out/
+*.log
+
+# 编辑器
+.idea/
+.vscode/
+.DS_Store
