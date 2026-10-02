@@ -16,6 +16,13 @@ from .base import CheckContext
 _CITE_ORDER_BAD = re.compile(r"[〔\[]\d{4}[〕\]]\d+号\s*《")
 _CITE_RE = re.compile(r"《([^《》]+)》\s*(（([^（）]*〔\d{4}〕\d+号|[^（）]*第\d+号)）)?")
 SUPPORT_THRESHOLD = 0.30
+_BASIS_LEAD = re.compile(r"(根据|依据|按照|依照|遵照|贯彻落实|落实)\s*《([^《》]+)》")
+
+
+def _about(title: str, p) -> bool:
+    """文稿本身是否就是关于该规范所管事项的（如“关于规范公文处理工作的通知”可以引用条例）。"""
+    keys = {k for m in p.matters for k in (m, m[:2]) if k} | {"公文", "文件", "格式", "发文"}
+    return any(k in (title or "") for k in keys)
 
 
 def _claim_text(sentence: str) -> str:
@@ -70,6 +77,23 @@ def check_citations(ctx: CheckContext) -> list[ReviewIssue]:
                 p = lib.get(ev.policy_id)
                 if p and p not in cited:
                     cited.append(p)
+        basis_titles = {m.group(2) for m in _BASIS_LEAD.finditer(s.text)}
+        if basis_titles:
+            for p in cited:
+                if p.title not in basis_titles and not any(lib.lookup_title(t) is p for t in basis_titles):
+                    continue
+                if p.basis_role == "procedural" and p.status == "现行有效" and not _about(ctx.ir.title, p):
+                    out.append(
+                        ctx.issue(
+                            "GW-BASIS-005",
+                            IssueType.CITATION_UNSUPPORTED,
+                            f"{p.cite()}规范的是公文处理、格式或程序等事项，一般不作为“{ctx.ir.title or '本事项'}”的实体依据；请改引与事项内容直接相关的政策文件，或删去该依据",
+                            block=b,
+                            sentence=s,
+                            evidence=[EvidenceRef(kind="policy", id=p.policy_id)],
+                            needs_human=True,
+                        )
+                    )
         if not ctx.features.temporal_check or as_of is None:
             continue
         for p in cited:

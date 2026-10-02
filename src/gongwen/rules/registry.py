@@ -92,6 +92,7 @@ RULES: dict[str, RuleMeta] = {
         _r("GW-BASIS-002", "依据应在适用时点、地域、主体下有效", L.REGULATION, f"{_T}第二十条（一）（二）", S.BLOCKING, "依据", TIAOLI, "第二十条"),
         _r("GW-BASIS-003", "依据应支持具体表述", L.REGULATION, f"{_T}第二十条（一）", S.MAJOR, "依据", TIAOLI, "第二十条"),
         _r("GW-BASIS-004", "引用公文先引标题、后引发文字号", L.PRACTICE, "实务沿用（原出处为已废止的国发〔2000〕23号）", S.MINOR, "依据"),
+        _r("GW-BASIS-005", "公文处理、格式、保密等程序性规范一般不作为业务事项的实体依据", L.PRACTICE, "实务惯例（行文依据应与事项内容相关，条例第二十条（一）审核“行文依据是否准确”）", S.MINOR, "依据"),
         # ---- 语义强度
         _r("GW-SEM-001", "义务强度不得擅自改变", L.REGULATION, f"{_T}第十九条（一）完整准确体现发文机关意图", S.MAJOR, "语义", TIAOLI, "第十九条"),
         _r("GW-SEM-002", "实施范围不得擅自扩大", L.REGULATION, f"{_T}第十九条（一）（二）", S.MAJOR, "语义", TIAOLI, "第十九条"),

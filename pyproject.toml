@@ -20,6 +20,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+anthropic = ["anthropic>=1.0"]
 dev = ["pytest>=8"]
 
 [project.scripts]
@@ -36,9 +37,10 @@ gongwen = [
   "knowledge/seed/*.yaml",
   "knowledge/seed/*.json",
   "layout/profiles/*.yaml",
-  "workbench/static/*",
   "eval/cases/*.yaml",
+  "eval/cases/materials/*",
   "profiles/*.yaml",
+  "agent_skills/*/SKILL.md",
 ]
 
 [tool.pytest.ini_options]

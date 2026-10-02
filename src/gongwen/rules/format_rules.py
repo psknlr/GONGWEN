@@ -25,7 +25,7 @@ def check_header_fields(ctx: CheckContext) -> list[ReviewIssue]:
                 hint.append("年份用六角括号〔〕")
             if "第" in h.doc_number:
                 hint.append("顺序号不加“第”字")
-            if re.search(r"〕0\d", h.doc_number):
+            if re.search(r"[〕\]\)）］】]\s*第?\s*0\d", h.doc_number):
                 hint.append("顺序号不编虚位")
             out.append(ctx.issue("GW-FMT-001", IssueType.FORMAT, "发文字号格式不规范：" + ("、".join(hint) or "应为“机关代字〔年份〕顺序号号”"), field_name="header.doc_number", original=h.doc_number))
     if h.copy_no and not re.fullmatch(r"\d{6}", h.copy_no):

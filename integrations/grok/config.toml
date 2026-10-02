@@ -1,0 +1,10 @@
+# Grok Build（xAI 官方 grok 命令行）接入公文智能体
+# 位置：~/.grok/config.toml（Grok Build 也会读取项目 .mcp.json，见 ../claude-code/.mcp.json）
+# 等价命令：grok mcp add gongwen -- gongwen -C /path/to/workspace mcp
+# 工具在 Grok 中以 <server>__<tool> 命名，例如 gongwen__text_check、gongwen__task_advance。
+
+[mcp_servers.gongwen]
+command = "gongwen"
+args = ["-C", "/path/to/workspace", "mcp"]
+startup_timeout_sec = 20
+tool_timeout_sec = 300

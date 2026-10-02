@@ -54,6 +54,41 @@ class ToolResult:
         return json.dumps(self.output, ensure_ascii=False, indent=2, default=str)
 
 
+_JSON_TYPES = {"string": str, "integer": int, "number": (int, float), "boolean": bool, "object": dict, "array": list}
+
+
+def validate_args(schema: dict[str, Any], args: Any) -> str | None:
+    """按工具参数 Schema 做最小校验（必填、未知字段、类型、枚举、数值范围）。
+    模型给出的参数是不可信输入：即使服务商宣称“严格模式”，执行前也要本地复核。"""
+    if not isinstance(args, dict):
+        return "参数必须是 JSON 对象"
+    props = schema.get("properties", {})
+    for k in schema.get("required", []):
+        if k not in args or args[k] is None:
+            return f"缺少必填参数：{k}"
+    if schema.get("additionalProperties") is False:
+        extra = [k for k in args if k not in props]
+        if extra:
+            return f"未知参数：{'、'.join(extra)}"
+    for k, v in args.items():
+        spec = props.get(k)
+        if spec is None or v is None:
+            continue
+        types = spec.get("type")
+        types = types if isinstance(types, list) else [types] if types else []
+        py = tuple(t for name in types if name in _JSON_TYPES for t in (_JSON_TYPES[name] if isinstance(_JSON_TYPES[name], tuple) else (_JSON_TYPES[name],)))
+        if py and (not isinstance(v, py) or (isinstance(v, bool) and bool not in py)):
+            return f"参数 {k} 类型应为 {'/'.join(types)}"
+        if "enum" in spec and v not in spec["enum"]:
+            return f"参数 {k} 取值应为：{'、'.join(map(str, spec['enum']))}"
+        if isinstance(v, (int, float)) and not isinstance(v, bool):
+            if "minimum" in spec and v < spec["minimum"]:
+                return f"参数 {k} 不应小于 {spec['minimum']}"
+            if "maximum" in spec and v > spec["maximum"]:
+                return f"参数 {k} 不应大于 {spec['maximum']}"
+    return None
+
+
 class ToolRegistry:
     def __init__(
         self,
@@ -115,7 +150,7 @@ class ToolRegistry:
     ) -> ToolResult:
         spec = self.tools.get(name)
         audit = self.log.append if self.log else (lambda *a, **k: None)
-        args_digest = sha256_text(json.dumps(args, ensure_ascii=False, sort_keys=True, default=str))
+        args_digest = sha256_text(json.dumps(args, ensure_ascii=False, sort_keys=True, default=str)) if isinstance(args, dict) else sha256_text(str(args))
         base = {"tool": name, "principal": principal.id, "args_sha256": args_digest}
         if spec is None:
             audit("tool.denied", {**base, "reason": "未知工具"}, actor=principal.id, stage=stage)
@@ -132,6 +167,10 @@ class ToolRegistry:
             reason = f"工具 {name} 仅限人工通道"
             audit("tool.denied", {**base, "reason": reason}, actor=principal.id, stage=stage)
             return ToolResult(False, error=reason)
+        invalid = validate_args(spec.parameters, args)
+        if invalid:
+            audit("tool.denied", {**base, "reason": f"参数无效：{invalid}"}, actor=principal.id, stage=stage)
+            return ToolResult(False, error=f"参数无效：{invalid}")
         decision = self.permissions.check(principal, spec.action, matter_id)
         if not decision.allowed:
             audit("tool.denied", {**base, "reason": decision.reason}, actor=principal.id, stage=stage)

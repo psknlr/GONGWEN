@@ -23,7 +23,7 @@ from ..schemas.state import Stage, TaskState
 if TYPE_CHECKING:  # pragma: no cover
     from ..runtime import Runtime
 
-SKILLS_DIR = Path(__file__).resolve().parents[3] / "skills"
+SKILLS_DIR = Path(__file__).resolve().parents[1] / "agent_skills"
 
 
 @functools.lru_cache(maxsize=None)

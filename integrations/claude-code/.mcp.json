@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "gongwen": {
+      "type": "stdio",
+      "command": "gongwen",
+      "args": ["-C", ".", "mcp"],
+      "env": {}
+    }
+  }
+}

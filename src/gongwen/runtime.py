@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 import importlib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
@@ -92,6 +92,7 @@ class Runtime:
     ctx: Context
     config: GongwenConfig
     workspace: Path
+    listeners: list[Callable[[str, dict[str, Any]], None]] = field(default_factory=list)  # (task_id, 事件记录)
 
     # ---- 便捷访问
     @property
@@ -142,7 +143,14 @@ class Runtime:
         return merged_instructions(self.workspace)
 
     def session_log(self, task_id: str) -> SessionLog:
-        return SessionLog(self.tasks.task_dir(task_id) / "events.jsonl")
+        on_append = None
+        if self.listeners:
+
+            def on_append(rec: dict[str, Any]) -> None:
+                for fn in list(self.listeners):
+                    fn(task_id, rec)
+
+        return SessionLog(self.tasks.task_dir(task_id) / "events.jsonl", on_append=on_append)
 
     def router(self, log: SessionLog | None = None, usage: BudgetUsage | None = None, providers: dict | None = None) -> ModelRouter:
         egress = EgressGateway(

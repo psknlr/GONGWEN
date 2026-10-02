@@ -14,7 +14,7 @@ import json
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Callable, Iterator
 
 from ..schemas.common import sha256_text
 
@@ -39,10 +39,11 @@ def _minimize(value: Any, depth: int = 0) -> Any:
 
 
 class SessionLog:
-    def __init__(self, path: str | Path, minimize: bool = True):
+    def __init__(self, path: str | Path, minimize: bool = True, on_append: Callable[[dict[str, Any]], None] | None = None):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.minimize = minimize
+        self.on_append = on_append  # 事件订阅（如无头模式输出 NDJSON）；只收到最小化后的记录
         self._lock = threading.Lock()
         self._seq, self._last_hash = self._tail()
 
@@ -76,7 +77,12 @@ class SessionLog:
             with self.path.open("a", encoding="utf-8") as fh:
                 fh.write(json.dumps(body, ensure_ascii=False, default=str) + "\n")
             self._seq, self._last_hash = body["seq"], digest
-            return body
+        if self.on_append is not None:
+            try:
+                self.on_append(body)
+            except Exception:  # 订阅方异常不影响审计记录本身
+                pass
+        return body
 
     def __iter__(self) -> Iterator[dict[str, Any]]:
         return self.replay()

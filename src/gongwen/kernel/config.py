@@ -106,6 +106,22 @@ class FeatureFlags(GWModel):
     burden_check: bool = True
 
 
+class McpConfig(GWModel):
+    """MCP 服务（供 Codex / grok / Claude Code 等外部智能体客户端调用）。"""
+
+    max_clearance: Clearance = Field(
+        default=Clearance.PUBLIC,
+        description="经 MCP 返回给外部客户端的内容的最高材料属性。客户端会把结果送入其自身配置的模型，本系统无法控制其去向，默认仅限公开。",
+    )
+    allow_material_paths: bool = Field(default=True, description="是否允许按工作区内路径添加材料（工作区外路径一律拒绝）")
+
+
+class AgentConfig(GWModel):
+    """对话式代理（gongwen chat）。"""
+
+    max_turns: int = Field(default=16, description="单次用户输入内模型—工具往返的最大轮数")
+
+
 class GongwenConfig(GWModel):
     environment: EnvironmentConfig = Field(default_factory=EnvironmentConfig)
     model: ModelConfig = Field(default_factory=ModelConfig)
@@ -118,6 +134,8 @@ class GongwenConfig(GWModel):
     review: ReviewConfig = Field(default_factory=ReviewConfig)
     layout: LayoutConfig = Field(default_factory=LayoutConfig)
     features: FeatureFlags = Field(default_factory=FeatureFlags)
+    mcp: McpConfig = Field(default_factory=McpConfig)
+    agent: AgentConfig = Field(default_factory=AgentConfig)
     profiles: dict[str, dict[str, Any]] = Field(default_factory=dict)
     plugins: list[dict[str, Any]] = Field(default_factory=list, description="附加插件：[{module=..., config={...}}]")
 
@@ -230,10 +248,15 @@ margin_mode = "standard"     # standard：天头37mm/订口28mm；compensated：
 # [models.reviewer]
 # provider = "zhipu"
 # name = "glm-4.6"
-# api_key_env = "ZHIPU_API_KEY"
+# api_key_env = "ZHIPUAI_API_KEY"
 # [routing]
 # heavy = "drafter"
 # reviewer = "reviewer"
+
+[mcp]
+# 经 MCP 返回给外部智能体客户端（Codex、grok、Claude Code 等）的内容的最高材料属性。
+# 客户端会把工具结果送入它自己配置的模型，本系统无法控制其去向，因此默认仅限公开材料。
+max_clearance = "公开"
 
 # 示例：钩子（借鉴 grok-cli / Claude Code hooks）
 # [[hooks.PreToolUse]]

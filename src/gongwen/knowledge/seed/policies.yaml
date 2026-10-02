@@ -27,7 +27,9 @@
   - 公文拟制
   - 公文办理
   - 公文管理
-  supersedes: []
+  supersedes:
+  - zhonggong-gongwen-tiaoli-1996
+  - guowuyuan-gongwen-banfa-2000
   source_url: https://www.gov.cn/gongbao/content/2013/content_2344541.htm
   fetched_at: 2026-10-02 00:00:00+00:00
   verification: 已核（全文42条经5个独立来源逐字比对一致；印发日期据二手来源）
@@ -317,6 +319,8 @@
   - 公文格式
   - 版式
   - 排版
+  supersedes:
+  - gbt-9704-1999
   source_url: https://openstd.samr.gov.cn/bzgk/gb/newGbInfo?hcno=F3CC9BEF482524C895FDA7A08BB4A70E
   fetched_at: '2026-10-02T00:00:00Z'
   verification: 已核（官方来源元数据；条款要点经公开文本逐字核对）
@@ -694,4 +698,62 @@
     text: 第四十八条 本条例自2019年1月31日起施行。
     verbatim: true
     verification: 已核（官方来源逐字摘录）
+  basis_role: procedural
+# ---------------------------------------------------------------- 已停止执行的旧规（用于识别“引用旧规”）
+- policy_id: zhonggong-gongwen-tiaoli-1996
+  title: 中国共产党机关公文处理条例
+  issuers:
+  - 中共中央办公厅
+  level: 旧规
+  publish_date: '1996-05-03'
+  repeal_date: '2012-07-01'
+  status: 已废止
+  regions:
+  - 全国
+  subjects:
+  - 党的机关
+  matters:
+  - 公文处理
+  superseded_by:
+  - gongwen-tiaoli-2012
+  verification: 已核（《党政机关公文处理工作条例》第四十二条原文：1996年5月3日中共中央办公厅发布的《中国共产党机关公文处理条例》……停止执行）
+  notes: 发文字号未经核验，故不填写。自2012年7月1日起停止执行，不应再作为依据引用。
+  basis_role: procedural
+- policy_id: guowuyuan-gongwen-banfa-2000
+  title: 国家行政机关公文处理办法
+  issuers:
+  - 国务院
+  doc_number: 国发〔2000〕23号
+  level: 旧规
+  publish_date: '2000-08-24'
+  repeal_date: '2012-07-01'
+  status: 已废止
+  regions:
+  - 全国
+  subjects:
+  - 国家行政机关
+  matters:
+  - 公文处理
+  superseded_by:
+  - gongwen-tiaoli-2012
+  verification: 已核（《党政机关公文处理工作条例》第四十二条原文：2000年8月24日国务院发布的《国家行政机关公文处理办法》停止执行）
+  notes: 自2012年7月1日起停止执行。其中“引用公文先引标题后引发文字号”“日期写全”等写法仍为实务沿用，但不得称为现行规定。
+  basis_role: procedural
+- policy_id: gbt-9704-1999
+  title: 国家行政机关公文格式
+  doc_number: GB/T 9704—1999
+  level: 旧规
+  repeal_date: '2012-07-01'
+  status: 已废止
+  regions:
+  - 全国
+  subjects:
+  - 国家行政机关
+  matters:
+  - 公文格式
+  superseded_by:
+  - gbt-9704-2012
+  source_url: https://openstd.samr.gov.cn/bzgk/gb/
+  verification: 已核（国家标准全文公开系统标注“废止”，由 GB/T 9704—2012 代替）
+  notes: “每排最多3个印章”“纪要不加盖印章”等为该版表述，现行 GB/T 9704—2012 已不再规定。
   basis_role: procedural

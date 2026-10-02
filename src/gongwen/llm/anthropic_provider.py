@@ -20,11 +20,18 @@ DEFAULT_MODEL = "claude-opus-5-5"
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
 
 
+_UNSUPPORTED = ("minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "multipleOf", "minLength", "maxLength")
+
+
 def _strictify(schema: dict[str, Any]) -> dict[str, Any]:
-    """严格模式要求每个对象 additionalProperties=false 且列出 required。"""
+    """严格模式要求每个对象 additionalProperties=false 且列出 required；
+    数值、长度约束不在结构化输出支持范围内，改写进 description，由本地校验兜底。"""
     if not isinstance(schema, dict):
         return schema
     out = dict(schema)
+    dropped = [f"{k}={out.pop(k)}" for k in _UNSUPPORTED if k in out]
+    if dropped:
+        out["description"] = (out.get("description", "") + f"（约束：{'，'.join(dropped)}）").strip()
     if out.get("type") == "object":
         props = out.get("properties", {})
         out["properties"] = {k: _strictify(v) for k, v in props.items()}

@@ -24,7 +24,7 @@ from ..llm.base import ModelRefused
 from ..parsing import parse_bytes
 from ..parsing.admission import ScanInput, aggregation_risk, scan
 from ..rules import CheckContext
-from ..schemas.common import AdmissionDecision, Clearance, DocStatus, IdAllocator, stable_hash, utcnow
+from ..schemas.common import AdmissionDecision, Clearance, DocStatus, IdAllocator, sha256_text, stable_hash, utcnow
 from ..schemas.facts import FactLedger, FactStatus
 from ..schemas.genre import GenreDecision
 from ..schemas.ir import DocumentIR
@@ -495,7 +495,7 @@ class Engine:
             st,
             log,
             CheckpointKind.HUMAN_REVIEW,
-            f"人工送审：当前文稿为“{pkg.status.value}”。请审阅工作台中的文稿、证据、问题、待确认项和修改差异后决定",
+            f"当前文稿为“{pkg.status.value}”。请审阅工作台中的文稿、证据、问题、待确认项和修改差异后决定",
             pkg.status_reasons + [f"输出：{o.kind} {o.path}" for o in pkg.outputs],
         )
         return None
@@ -532,18 +532,16 @@ class Engine:
         self.store.write_json(st.task_id, "workbench_data.json", data)
         return pkg, data
 
-    def workbench_page(self, task_id: str, *, api: str = "", token: str = "") -> str | None:
-        """当前文稿的审阅工作台页面；尚未形成文稿时返回 None。
+    def workbench_data(self, task_id: str) -> dict[str, Any] | None:
+        """审阅工作台数据（证据映射、问题、待确认项、版本差异）；尚未审校时返回 None。
 
         优先复用最近一次送审打包生成的数据（与当前版本一致时），只刷新待确认事项，
-        避免每次浏览都重新打包、重复写审计日志。
+        避免每次查看都重新打包、重复写审计日志。
         """
         st = self.load_state(task_id)
         ir = self.current_ir(st)
         if ir is None:
             return None
-        from ..workbench import build_page
-
         cache = self.store.task_dir(task_id) / "workbench_data.json"
         data = None
         if cache.exists():
@@ -555,12 +553,20 @@ class Engine:
                 return None
             _, data = self.package_with_data(st, self.log(task_id))
             self.save_state(st)
-            ir = self.current_ir(st)
         data["checkpoints"] = [
             {"cp_id": c.cp_id, "kind": c.kind.value, "question": c.question, "details": c.details, "options": [o.model_dump() for o in c.options]}
             for c in st.pending_checkpoints()
         ]
-        return build_page(ir, data, api=api, token=token)
+        return data
+
+    def workbench_page(self, task_id: str, *, api: str = "", token: str = "") -> str | None:
+        """当前文稿的审阅工作台页面；尚未形成审校结果时返回 None。"""
+        data = self.workbench_data(task_id)
+        if data is None:
+            return None
+        from ..workbench import build_page
+
+        return build_page(self.current_ir(self.load_state(task_id)), data, api=api, token=token)
 
     # ================================================================ 人工审核节点
     def resolve_checkpoint(self, task_id: str, cp_id: str, option: str, *, by: Principal, note: str = "", data: dict[str, Any] | None = None) -> TaskState:
@@ -845,6 +851,65 @@ class Engine:
         log.append("revision.requested", {"patches": len(combined.patches), "fact_changes": len(combined.fact_changes), "affected_docs": combined.affected_docs, "instruction": bool(data.get("instruction"))}, actor=by.id)
         self._transition(st, log, Stage.REVIEW, "人工发起修订后重新审校")
 
+    # ================================================================ 修改建议（模型通道提交，人工采纳）
+    def propose_revision(self, task_id: str, *, by: Principal, instruction: str, reason: str = "") -> dict[str, Any]:
+        """模型通道（对话代理、MCP 客户端）只能“提交修改建议”，不直接改稿；须由人工采纳后才进入定向修订。"""
+        st = self.load_state(task_id)
+        self._require(by, Action.PROPOSAL_SUBMIT, st.matter_id)
+        instruction = (instruction or "").strip()
+        if not instruction:
+            raise ValueError("修改建议不能为空")
+        if self.current_ir(st) is None:
+            raise ValueError("尚未形成文稿，不能提交修改建议")
+        if st.stage in (Stage.FAILED, Stage.BLOCKED):
+            raise ValueError(f"任务处于“{st.stage.value}”，不能提交修改建议")
+        item = {
+            "proposal_id": st.ids.next("PR"),
+            "instruction": instruction[:2000],
+            "reason": (reason or "")[:500],
+            "by": by.id,
+            "at": utcnow().isoformat(),
+            "version": st.current_version,
+            "status": "pending",
+        }
+        st.options.setdefault("proposals", []).append(item)
+        self.log(task_id).append(
+            "proposal.submitted",
+            {"proposal_id": item["proposal_id"], "instruction_sha256": sha256_text(instruction), "chars": len(instruction), "version": st.current_version},
+            actor=by.id,
+            stage=st.stage.value,
+        )
+        self.save_state(st)
+        return item
+
+    def proposals(self, task_id: str, status: str | None = None) -> list[dict[str, Any]]:
+        st = self.load_state(task_id)
+        return [p for p in st.options.get("proposals", []) if status is None or p.get("status") == status]
+
+    def apply_proposal(self, task_id: str, proposal_id: str, *, by: Principal) -> TaskState:
+        st = self.load_state(task_id)
+        if not by.is_human:
+            raise PermissionError("修改建议须由人工采纳，模型通道不能自行采纳")
+        item = next((p for p in st.options.get("proposals", []) if p["proposal_id"] == proposal_id), None)
+        if item is None or item.get("status") != "pending":
+            raise KeyError(f"没有待采纳的修改建议：{proposal_id}")
+        item.update({"status": "applied", "decided_by": by.id, "decided_at": utcnow().isoformat()})
+        self.log(task_id).append("proposal.applied", {"proposal_id": proposal_id}, actor=by.id, stage=st.stage.value)
+        self.save_state(st)
+        return self.request_revision(task_id, by=by, instruction=item["instruction"])
+
+    def reject_proposal(self, task_id: str, proposal_id: str, *, by: Principal, note: str = "") -> TaskState:
+        st = self.load_state(task_id)
+        if not by.is_human:
+            raise PermissionError("修改建议须由人工处理")
+        item = next((p for p in st.options.get("proposals", []) if p["proposal_id"] == proposal_id), None)
+        if item is None or item.get("status") != "pending":
+            raise KeyError(f"没有待处理的修改建议：{proposal_id}")
+        item.update({"status": "rejected", "decided_by": by.id, "decided_at": utcnow().isoformat(), "note": note[:500]})
+        self.log(task_id).append("proposal.rejected", {"proposal_id": proposal_id}, actor=by.id, stage=st.stage.value)
+        self.save_state(st)
+        return st
+
     # ================================================================ 审批记录绑定
     def import_approval(self, task_id: str, *, by: Principal, approver: str, approved_at: str, scope: str, source: str, approver_title: str = "") -> TaskState:
         st = self.load_state(task_id)
@@ -952,6 +1017,7 @@ class Engine:
             "doc_status": st.doc_status.value,
             "version": st.current_version,
             "pending_checkpoints": [{"cp_id": c.cp_id, "kind": c.kind.value, "question": c.question, "details": c.details, "options": [f"{o.key}={o.label}" for o in c.options]} for c in st.pending_checkpoints()],
+            "pending_proposals": [{k: v for k, v in p.items() if k in ("proposal_id", "instruction", "reason", "by", "version")} for p in st.options.get("proposals", []) if p.get("status") == "pending"],
             "issue_counts": report.counts() if report else {},
             "errors": st.errors,
             "budget": st.budget.model_dump(),

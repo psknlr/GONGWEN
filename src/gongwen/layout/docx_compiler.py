@@ -63,6 +63,7 @@ class Compiler:
         self.p = profile
         self.doc = Document()
         self.draft_label = draft_label
+        self.imported = ir.meta.get("source") == "imported"  # 外部文稿：只排版，内容未经本系统核验
         self.fonts_used: set[str] = set()
 
     # ------------------------------------------------------------------ 底层工具
@@ -253,7 +254,8 @@ class Compiler:
         if self.ir.format_type == "letter" and not self.p.data["letter"].get("first_page_number", True):
             s.different_first_page_header_footer = True
         if self.draft_label:
-            label = self.p.data.get("draft_label", "").format(status=self.ir.status.value)
+            key = "format_label" if self.imported else "draft_label"
+            label = self.p.data.get(key, self.p.data.get("draft_label", "")).format(status=self.ir.status.value)
             for header in (s.header, s.even_page_header):
                 hp = header.paragraphs[0]
                 hp.alignment = WD_ALIGN_PARAGRAPH.CENTER
@@ -558,9 +560,14 @@ class Compiler:
         cp = self.doc.core_properties
         cp.title = self.ir.title[:200]
         cp.subject = f"{self.ir.genre or self.ir.material_type or ''}｜{self.ir.status.value}"
-        cp.keywords = "公文智能体;AI辅助起草;须人工审核"
-        cp.comments = f"doc_id={self.ir.doc_id}; version={self.ir.version}; status={self.ir.status.value}; 本稿由公文智能体辅助起草，须经人工审核。"
-        cp.author = "GONGWEN 公文智能体（辅助起草）"
+        if self.imported:
+            cp.keywords = "公文智能体;排版;内容未经系统核验;须人工审核"
+            cp.comments = f"本稿由公文智能体按 {self.p.id} 排版，正文内容来自外部文稿、未经本系统核验，须经人工审核。"
+            cp.author = "GONGWEN 公文智能体（排版）"
+        else:
+            cp.keywords = "公文智能体;AI辅助起草;须人工审核"
+            cp.comments = f"doc_id={self.ir.doc_id}; version={self.ir.version}; status={self.ir.status.value}; 本稿由公文智能体辅助起草，须经人工审核。"
+            cp.author = "GONGWEN 公文智能体（辅助起草）"
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         self.doc.save(str(path))

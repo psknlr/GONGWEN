@@ -33,6 +33,8 @@ class Action(str, Enum):
     CHECKPOINT_RESOLVE = "checkpoint.resolve"
     APPROVAL_IMPORT = "approval.import"
     MODEL_CALL = "model.call"
+    CHECK_RUN = "check.run"  # 对给定文本运行确定性规则检查（不读写任何事项材料）
+    PROPOSAL_SUBMIT = "proposal.submit"  # 提交修改建议（不直接改稿，须人工采纳）
     # 以下动作默认不授予任何主体
     EXTERNAL_SEND = "external.send"
     PUBLISH = "publish"
@@ -75,8 +77,13 @@ CHANNEL_GRANTS: dict[str, set[Action]] = {
         Action.TASK_WRITE,
         Action.EXPORT_WRITE,
         Action.MODEL_CALL,
+        Action.CHECK_RUN,
+        Action.PROPOSAL_SUBMIT,
     },
 }
+# 经 MCP 接入的外部智能体客户端（Codex、grok、Claude Code 等）：与对话代理同权，仍属模型通道。
+# 协议接入不等于授权：它同样不能处理审核节点、导入审批、确认准入。
+CHANNEL_GRANTS["channel:mcp"] = set(CHANNEL_GRANTS["channel:agent"])
 
 ROLE_GRANTS: dict[str, set[Action]] = {
     "drafter": {  # 经办人
@@ -90,8 +97,10 @@ ROLE_GRANTS: dict[str, set[Action]] = {
         Action.EXPORT_WRITE,
         Action.ADMISSION_CONFIRM,
         Action.MODEL_CALL,
+        Action.CHECK_RUN,
+        Action.PROPOSAL_SUBMIT,
     },
-    "reviewer": {Action.MATERIAL_READ, Action.POLICY_SEARCH, Action.ISSUE_WRITE, Action.CHECKPOINT_RESOLVE, Action.EXPORT_WRITE},
+    "reviewer": {Action.MATERIAL_READ, Action.POLICY_SEARCH, Action.ISSUE_WRITE, Action.CHECKPOINT_RESOLVE, Action.EXPORT_WRITE, Action.CHECK_RUN, Action.PROPOSAL_SUBMIT},
     "approver": {Action.MATERIAL_READ, Action.APPROVAL_IMPORT, Action.CHECKPOINT_RESOLVE},
     "admin": {Action.POLICY_PROMOTE, Action.ADMISSION_CONFIRM},
 }
