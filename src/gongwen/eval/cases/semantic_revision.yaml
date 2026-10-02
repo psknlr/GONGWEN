@@ -1,0 +1,183 @@
+# 第三组：语义与修订
+- id: SR-01
+  kind: revision
+  title: 关键事实变更联动正文合计与附件表格
+  request: 起草一份向市政府申请基层医疗示范点建设经费的请示
+  hints: {recipients: 示例市人民政府, issuer_type: 政府部门}
+  materials:
+    - &sit
+      name: 情况说明.md
+      text: |
+        关于基层医疗示范点建设的情况说明
+
+        为提升基层医疗卫生服务能力，我委于2025年启动基层医疗示范点建设。
+
+        截至2025年12月31日，我委已建成基层医疗示范点8个，覆盖5个区。
+
+        目前存在设备老化、服务能力不足等问题。
+
+        2026年拟新建示范点12个，计划于2026年12月底前完成建设。
+    - &budget
+      name: 经费测算表.csv
+      text: |
+        项目,金额（万元）
+        设备购置,60
+        场地改造,40
+        人员培训,20
+        合计,120
+  accept: [task_confirm, outline_confirm]
+  revise:
+    fact_changes:
+      - {attribute: 设备购置, new_value: 40, reason: 核减}
+  expect:
+    draft_contains: [经费合计100万元]
+    draft_not_contains: [经费合计120万元]
+    attachment_table_contains: ["40", "100"]
+
+- id: SR-02
+  kind: revision
+  title: 人工把“拟新建”改成“已新建” → 事实状态升级被标出并转人工
+  request: 起草一份向市政府申请基层医疗示范点建设经费的请示
+  hints: {recipients: 示例市人民政府, issuer_type: 政府部门}
+  materials: [*sit, *budget]
+  accept: [task_confirm, outline_confirm]
+  revise:
+    edits:
+      - {find: 2026年拟新建示范点12个, replace: 2026年已新建示范点12个}
+  expect:
+    rules_present: [GW-FACT-001]
+    doc_status: 讨论稿
+
+- id: SR-03
+  kind: revision
+  title: 人工写入“经市政府批准” → 未经真实批准不得写成已批准
+  request: 起草一份向市政府申请基层医疗示范点建设经费的请示
+  hints: {recipients: 示例市人民政府, issuer_type: 政府部门}
+  materials: [*sit, *budget]
+  accept: [task_confirm, outline_confirm]
+  revise:
+    edits:
+      - {find: 2026年拟新建示范点12个, replace: 经市政府批准，2026年拟新建示范点12个}
+  expect:
+    rules_present: [GW-SEM-006]
+
+- id: SR-04
+  kind: revision
+  title: 人工修改引入半角标点 → 定向修订自动纠正（机械性问题）
+  request: 起草一份向市政府申请基层医疗示范点建设经费的请示
+  hints: {recipients: 示例市人民政府, issuer_type: 政府部门}
+  materials: [*sit, *budget]
+  accept: [task_confirm, outline_confirm]
+  revise:
+    edits:
+      - {find: "我委已建成基层医疗示范点8个，覆盖5个区", replace: "我委已建成基层医疗示范点8个,覆盖5个区"}
+  expect:
+    rules_absent_open: [GW-PUNC-001]
+    draft_contains: [已建成基层医疗示范点8个，覆盖5个区]
+
+- id: SR-05
+  kind: revision
+  title: 已绑定审批的版本发生实质修改 → 审批失效，须报原签批人复审
+  request: 起草一份向市政府申请基层医疗示范点建设经费的请示
+  hints: {recipients: 示例市人民政府, issuer_type: 政府部门}
+  materials: [*sit, *budget]
+  accept: [task_confirm, outline_confirm]
+  revise:
+    approve_first: true
+    fact_changes:
+      - {attribute: 设备购置, new_value: 40, reason: 核减}
+  expect:
+    errors_contain: [须报原签批人复审]
+    log_events: [approval.invalidated]
+
+- id: SR-06
+  kind: pipeline
+  title: 无头模式即使授权自动接受，也不能越过人工送审
+  request: 起草一份向市政府申请基层医疗示范点建设经费的请示
+  hints: {recipients: 示例市人民政府, issuer_type: 政府部门}
+  materials: [*sit, *budget]
+  accept: [task_confirm, outline_confirm, review_escalation, conflict]
+  expect:
+    stage: 人工送审
+    pending_kinds: [人工送审]
+
+- id: SR-07
+  kind: model
+  title: 模型擅自写入“经市政府研究同意” → 校验器拒绝
+  model: approval_claim
+  request: 起草一份向市政府申请基层医疗示范点建设经费的请示
+  hints: {recipients: 示例市人民政府, issuer_type: 政府部门}
+  materials: [*sit, *budget]
+  accept: [task_confirm, outline_confirm]
+  expect:
+    stage: 人工送审
+    draft_not_contains: [经市政府研究同意]
+
+- id: SR-08
+  kind: model
+  title: 模型拒答 → 显式记录并回退确定性路径，不把空结果当成功
+  model: refuse
+  request: 起草一份向市政府申请基层医疗示范点建设经费的请示
+  hints: {recipients: 示例市人民政府, issuer_type: 政府部门}
+  materials: [*sit, *budget]
+  accept: [task_confirm, outline_confirm]
+  expect:
+    stage: 人工送审
+    draft_contains: [拟新建示范点12个]
+    log_events: [skill.model_skipped]
+
+- id: SR-09
+  kind: check
+  title: 相对时间表述
+  text: |
+    示例市卫生健康委员会关于做好示范点建设工作的通知
+    各区卫生健康局：
+    请各区卫生健康局于今年底前完成示范点建设，明年上半年组织验收。
+    示例市卫生健康委员会
+    2026年1月10日
+  expect:
+    rules_present: [GW-STYLE-003]
+
+- id: SR-10
+  kind: check
+  title: 空泛表态堆砌
+  text: |
+    示例市卫生健康委员会关于做好示范点建设工作的通知
+    各区卫生健康局：
+    各区要高度重视、精心组织、周密部署、狠抓落实，切实把示范点建设工作抓实抓细抓出成效。
+    请各区卫生健康局于2026年6月30日前完成选址。
+    示例市卫生健康委员会
+    2026年1月10日
+  expect:
+    rules_present: [GW-STYLE-001]
+
+- id: SR-11
+  kind: check
+  title: 新增高频报送要求（减负）
+  text: |
+    示例市卫生健康委员会关于做好示范点建设工作的通知
+    各区卫生健康局：
+    各区卫生健康局要每周报送示范点建设进展情况表，并建立工作台账。
+    示例市卫生健康委员会
+    2026年1月10日
+  expect:
+    rules_present: [GW-BURDEN-001]
+
+- id: SR-12
+  kind: check
+  control: true
+  title: 对照：规范的通知（不应有重要以上问题）
+  text: |
+    示例市卫生健康委员会关于做好2026年基层医疗示范点建设工作的通知
+    各区卫生健康局：
+    现就做好2026年基层医疗示范点建设工作有关事项通知如下。
+    一、明确建设任务
+    各区卫生健康局应当于2026年12月31日前完成示范点建设，并组织验收。
+    二、加强统筹协调
+    市卫生健康委负责统筹协调和技术指导。
+    特此通知。
+    示例市卫生健康委员会
+    2026年1月10日
+  expect:
+    genre: 通知
+    max_issues: {阻断送审: 0, 重要: 0}

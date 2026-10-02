@@ -1,0 +1,209 @@
+# 第一组：文种与行文（合成用例；机关名称均为“示例市/示例省”）
+- id: GR-01
+  kind: pipeline
+  title: 用户写“报告”，实质请求批准 → 请示
+  request: 写一份向主管部门申请基层医疗示范点建设经费的报告
+  hints: {recipients: 示例市人民政府, issuer_type: 政府部门}
+  materials:
+    - &sit
+      name: 情况说明.md
+      text: |
+        关于基层医疗示范点建设的情况说明
+
+        为提升基层医疗卫生服务能力，我委于2025年启动基层医疗示范点建设。
+
+        截至2025年12月31日，我委已建成基层医疗示范点8个，覆盖5个区。
+
+        目前存在设备老化、服务能力不足等问题。
+
+        2026年拟新建示范点12个，计划于2026年12月底前完成建设。
+    - &budget
+      name: 经费测算表.csv
+      text: |
+        项目,金额（万元）
+        设备购置,60
+        场地改造,40
+        人员培训,20
+        合计,120
+  accept: [task_confirm, outline_confirm]
+  expect:
+    stage: 人工送审
+    genre: 请示
+    title_suffix: 的请示
+    checkpoint_text: [更适合“请示”]
+    draft_contains: [妥否，请批示。, 拟新建示范点12个]
+    alternatives_include: [报告]
+
+- id: GR-02
+  kind: pipeline
+  title: 直接要求起草请示
+  request: 起草一份向市政府申请基层医疗示范点建设经费的请示
+  hints: {recipients: 示例市人民政府, issuer_type: 政府部门}
+  materials: [*sit, *budget]
+  accept: [task_confirm, outline_confirm]
+  expect:
+    stage: 人工送审
+    genre: 请示
+    draft_contains: [经费合计120万元, 妥否，请批示。]
+    numbers_sourced: true
+
+- id: GR-03
+  kind: pipeline
+  title: 汇报情况、不请求批准 → 报告，且不夹带请示事项
+  request: 向市政府报告2025年基层医疗示范点建设工作情况
+  hints: {recipients: 示例市人民政府, issuer_type: 政府部门}
+  materials: [*sit]
+  accept: [task_confirm, outline_confirm]
+  expect:
+    stage: 人工送审
+    genre: 报告
+    title_suffix: 工作情况的报告
+    draft_contains: [特此报告。]
+    draft_not_contains: [请批示, 请批复, 报告报告]
+
+- id: GR-04
+  kind: pipeline
+  title: 部署工作 → 通知（下行文），材料中的全部任务都写入
+  request: 起草一份部署2026年基层医疗示范点建设工作的通知
+  hints: {recipients: 各区卫生健康局, issuer_type: 政府部门}
+  materials:
+    - name: 工作安排.md
+      text: |
+        2026年基层医疗示范点建设工作安排
+
+        各区卫生健康局要在2026年6月底前完成选址。
+
+        各区卫生健康局应当于2026年12月底前完成示范点建设并组织验收。
+
+        市卫生健康委负责统筹协调和技术指导。
+  accept: [task_confirm, outline_confirm]
+  expect:
+    stage: 人工送审
+    genre: 通知
+    draft_contains: [2026年6月底前完成选址, 组织验收, 特此通知。]
+
+- id: GR-05
+  kind: pipeline
+  title: 向不相隶属的平级部门商请支持 → 函（平行文）
+  request: 给示例市财政局发函，商请支持基层医疗示范点建设经费
+  hints: {recipients: 示例市财政局, issuer_type: 政府部门}
+  materials: [*sit]
+  accept: [task_confirm, outline_confirm]
+  expect:
+    stage: 人工送审
+    genre: 函
+    title_suffix: 建设经费的函
+    draft_not_contains: [给示例市财政局发函, 请遵照执行]
+
+- id: GR-06
+  kind: pipeline
+  title: 部门向同级部门“申请”经费 → 提示不相隶属应用函
+  request: 向主管部门申请专项经费
+  hints: {issuer: 示例市卫生健康委员会, issuer_type: 政府部门, recipients: 示例市财政局}
+  env: {unit_name: ""}
+  human:
+    - {at: 任务契约确认, option: accept}
+  expect:
+    authority_codes: [PEER_DEPARTMENT]
+    alternatives_include: [函]
+
+- id: GR-07
+  kind: pipeline
+  title: 部门内设机构对外正式行文 → 超出权限
+  request: 向示例市财政局申请专项经费
+  hints: {issuer: 示例市卫生健康委员会规划发展处, recipients: 示例市财政局, direction: 上行文}
+  env: {unit_name: ""}
+  human:
+    - {at: 任务契约确认, option: accept}
+  expect:
+    stage: 超出权限
+    pending_kinds: [权限与行文关系确认]
+    checkpoint_text: [内设机构]
+
+- id: GR-08
+  kind: check
+  title: 报告中夹带请示事项
+  text: |
+    示例市卫生健康委员会关于2025年基层医疗示范点建设情况的报告
+    示例市人民政府：
+    现将2025年基层医疗示范点建设情况报告如下。
+    截至2025年12月31日，已建成基层医疗示范点8个。
+    恳请市政府安排专项经费120万元。
+    妥否，请批示。
+    示例市卫生健康委员会
+    2026年1月10日
+  expect:
+    genre: 报告
+    rules_present: [GW-GENRE-003]
+
+- id: GR-09
+  kind: check
+  title: 请示一文多事
+  text: |
+    示例市卫生健康委员会关于申请示范点建设经费和增加人员编制的请示
+    示例市人民政府：
+    为提升基层医疗卫生服务能力，现就有关事项请示如下。
+    一、拟申请安排示范点建设经费120万元。
+    二、拟申请增加人员编制10名。
+    妥否，请批示。
+    示例市卫生健康委员会
+    2026年1月10日
+  expect:
+    genre: 请示
+    rules_present: [GW-GENRE-002]
+
+- id: GR-10
+  kind: check
+  title: 函对不相隶属机关使用下行称谓与指令口吻
+  text: |
+    示例市卫生健康委员会关于商请支持基层医疗示范点建设的函
+    示例市财政局：
+    你局要高度重视基层医疗示范点建设，请遵照执行。
+    示例市卫生健康委员会
+    2026年1月10日
+  expect:
+    genre: 函
+    rules_present: [GW-GENRE-006, GW-GENRE-007]
+
+- id: GR-11
+  kind: check
+  title: 上行文结束语与行文方向错位
+  text: |
+    示例市卫生健康委员会关于基层医疗示范点建设情况的报告
+    示例市人民政府：
+    现将基层医疗示范点建设情况报告如下。
+    截至2025年12月31日，已建成基层医疗示范点8个。
+    请遵照执行。
+    示例市卫生健康委员会
+    2026年1月10日
+  expect:
+    rules_present: [GW-GENRE-005]
+
+- id: GR-12
+  kind: check
+  title: 标题缺发文机关与文种、末尾加句号
+  text: |
+    做好示范点建设工作。
+    各区卫生健康局：
+    请各区卫生健康局于2026年6月30日前完成选址。
+    示例市卫生健康委员会
+    2026年1月10日
+  expect:
+    rules_present: [GW-FMT-009]
+
+- id: GR-13
+  kind: check
+  control: true
+  title: 对照：规范的请示（不应有重要以上问题）
+  text: |
+    示例市卫生健康委员会关于申请基层医疗示范点建设经费的请示
+    示例市人民政府：
+    为提升基层医疗卫生服务能力，现就申请基层医疗示范点建设经费有关事项请示如下。
+    截至2025年12月31日，我委已建成基层医疗示范点8个，覆盖5个区。2026年拟新建示范点12个，经测算所需经费120万元。
+    拟申请安排经费120万元，用于基层医疗示范点建设。
+    妥否，请批示。
+    示例市卫生健康委员会
+    2026年1月10日
+  expect:
+    genre: 请示
+    max_issues: {阻断送审: 0, 重要: 0}

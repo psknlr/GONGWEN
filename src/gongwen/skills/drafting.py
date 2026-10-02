@@ -81,6 +81,7 @@ class Drafter:
         issuer = spec.issuer.value if spec.issuer.known else None
         self.issuer = issuer.get("name") if isinstance(issuer, dict) else (str(issuer) if issuer else "")
         self.self_ref = self_reference(self.issuer, sc.runtime.profile) if self.issuer else "本单位"
+        self.used_purpose = ""  # 开头已用的目的状语；正文事实句不再重复
         self.placeholders: list[Placeholder] = []
 
     # ---------------------------------------------------------------- 句子与段落
@@ -122,6 +123,8 @@ class Drafter:
                 seen[key].refs.append(EvidenceRef(kind="fact", id=f.fact_id))
                 continue
             text = norm_sentence(f.statement)
+            if self.used_purpose and text.startswith(self.used_purpose + "，") and len(text) > len(self.used_purpose) + 6:
+                text = text[len(self.used_purpose) + 1 :]  # 原句的连续片段，不改变语义
             if f.status == FactStatus.PROPOSED:
                 text = planned_form(text)
             if f.status == FactStatus.COMPUTED and f.formula:
@@ -175,6 +178,8 @@ class Drafter:
         cites, crefs = self.citations()
         k = self.doc_kind
         parts = []
+        if purpose and k in ("请示", "函") or (purpose and k not in ("报告", "纪要", "批复")):
+            self.used_purpose = purpose
         if k == "请示":
             if purpose:
                 parts.append(purpose)
@@ -183,9 +188,11 @@ class Drafter:
             parts.append(f"结合{self.self_ref}实际")
             text = "，".join(parts) + f"，现就{subject}有关事项请示如下。"
         elif k == "报告":
-            text = (f"根据{cites}有关要求，" if cites else "") + f"现将{subject}有关情况报告如下。"
+            tail = f"现将{subject}报告如下。" if subject.endswith("情况") else f"现将{subject}有关情况报告如下。"
+            text = (f"根据{cites}有关要求，" if cites else "") + tail
         elif k == "函":
-            text = (purpose + "，" if purpose else "") + f"现就{subject}有关事项函商如下。"
+            core = re.sub(r"^(商请|请求|恳请|请)(支持|协助|帮助|配合|解决)?", "", subject) or subject
+            text = (purpose + "，" if purpose else "") + f"现就{core}有关事项函商如下。"
         elif k == "纪要":
             meet = [f for f in self.ledger.facts if "meeting_record" in f.tags]
             info = norm_sentence(meet[0].statement) if meet else self.placeholder("meeting_info", "会议时间、地点、主持人和会议名称")
@@ -200,8 +207,12 @@ class Drafter:
         else:
             verb = {"通知": "通知", "意见": "提出如下意见", "决定": "决定", "通报": "通报"}.get(k, "说明")
             text = "，".join(p for p in [purpose, f"根据{cites}" if cites else ""] if p)
-            text = (text + "，" if text else "") + (f"现就{subject}有关事项{verb}如下。" if verb in ("通知", "说明") else f"现就{subject}{verb}。")
-        return self.para([self.sent(text, crefs, "依据" if crefs else "背景")], self.outline.opening.para_id if self.outline.opening else None)
+            core = re.sub(r"^(部署|安排)(?=\S{4,})", "", subject) if k == "通知" else subject
+            text = (text + "，" if text else "") + (f"现就{core}有关事项{verb}如下。" if verb in ("通知", "说明") else f"现就{core}{verb}。")
+        refs = list(crefs)
+        if re.search(r"\d", subject) and re.search(r"\d", text):
+            refs.append(EvidenceRef(kind="task", id="subject", note="事由取自经确认的办文需求"))
+        return self.para([self.sent(text, refs, "依据" if crefs else "背景")], self.outline.opening.para_id if self.outline.opening else None)
 
     def body(self) -> list[Block]:
         blocks: list[Block] = []
@@ -275,9 +286,12 @@ class Drafter:
             t = money_tables[min(seq - 1, len(money_tables) - 1)]
             grid = [t.header] + t.rows
             block = Block(bid=self.ids.next("b"), kind="table", table=grid)
-            src = Sentence(sid=self.ids.next("s"), text=f"（数据来源：{t.material_id}{('；' + '；'.join(t.notes)) if t.notes else ''}）", refs=[EvidenceRef(kind="material", id=t.material_id)], function="事实")
+            blocks = [block]
+            if t.notes:  # 表注限定统计口径，须随表保留；来源追溯见事实依据表，不写入正文
+                src = Sentence(sid=self.ids.next("s"), text="注：" + "；".join(n.strip("。") for n in t.notes) + "。", refs=[EvidenceRef(kind="material", id=t.material_id)], function="条件")
+                blocks.append(Block(bid=self.ids.next("b"), kind="paragraph", sentences=[src]))
             notes.append(AttachmentNote(seq=seq, name=title))
-            atts.append(Attachment(seq=seq, title=title, blocks=[block, Block(bid=self.ids.next("b"), kind="paragraph", sentences=[src])]))
+            atts.append(Attachment(seq=seq, title=title, blocks=blocks))
         return notes, atts
 
     def build(self) -> DocumentIR:

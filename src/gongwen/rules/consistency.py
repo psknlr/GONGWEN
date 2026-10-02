@@ -82,6 +82,8 @@ def check_fact_values(ctx: CheckContext) -> list[ReviewIssue]:
         mentions = extract_numbers(s.text)
         if not mentions:
             continue
+        ref_facts = [ctx.ledger.get(r.id) for r in s.refs if r.kind == "fact"]
+        ref_facts = [f for f in ref_facts if f is not None and isinstance(f.value, (int, float))]
         for r in s.refs:
             if r.kind != "fact":
                 continue
@@ -89,21 +91,40 @@ def check_fact_values(ctx: CheckContext) -> list[ReviewIssue]:
             if f is None or not isinstance(f.value, (int, float)) or r.note == "auto-linked":
                 continue
             same_kind = [m for m in mentions if (m.kind == "money") == (f.kind == "money") and m.kind != "plain"]
-            if same_kind and not any(same_quantity(m, float(f.value), f.unit) for m in same_kind):
+            if not same_kind or any(same_quantity(m, float(f.value), f.unit) for m in same_kind):
+                continue
+            # 句中的数字由本句引用的其他事实解释：说明该句已不再陈述 f，而不是数字写错
+            others = [g for g in ref_facts if g.fact_id != f.fact_id]
+            unexplained = [m for m in same_kind if not any(same_quantity(m, float(g.value), g.unit) for g in others)]
+            if not unexplained:
                 out.append(
                     ctx.issue(
                         "GW-FACT-002",
                         IssueType.FACT_MISMATCH,
-                        f"该句引用 {f.fact_id}（{f.display_value()}），但句中数字为“{'、'.join(m.raw for m in same_kind)}”",
+                        f"该句引用了 {f.fact_id}（{f.attribute} {f.display_value()}），但句中已不再出现该数据：请确认是删除了相应内容（应同时去掉该证据引用），还是需要补回",
                         block=b,
                         sentence=s,
                         evidence=[EvidenceRef(kind="fact", id=f.fact_id)],
                         evidence_text=f.sources[0].excerpt if f.sources else f.statement,
-                        severity=Severity.BLOCKING if f.kind == "money" else Severity.MAJOR,
-                        auto_fixable=len(same_kind) == 1,
-                        fix_hint={"op": "replace_number", "fact": f.fact_id, "raw": same_kind[0].raw},
+                        severity=Severity.MINOR,
+                        needs_human=True,
                     )
                 )
+                continue
+            out.append(
+                ctx.issue(
+                    "GW-FACT-002",
+                    IssueType.FACT_MISMATCH,
+                    f"该句引用 {f.fact_id}（{f.display_value()}），但句中数字为“{'、'.join(m.raw for m in unexplained)}”",
+                    block=b,
+                    sentence=s,
+                    evidence=[EvidenceRef(kind="fact", id=f.fact_id)],
+                    evidence_text=f.sources[0].excerpt if f.sources else f.statement,
+                    severity=Severity.BLOCKING if f.kind == "money" else Severity.MAJOR,
+                    auto_fixable=len(unexplained) == 1,
+                    fix_hint={"op": "replace_number", "fact": f.fact_id, "raw": unexplained[0].raw},
+                )
+            )
     return out
 
 

@@ -101,8 +101,11 @@ class _Builder:
                 continue
             label, rest = m.group(1), m.group(2).strip()
             cut = rest.find("。")
-            if cut == -1 or (cut == len(rest) - 1 and len(rest) <= 30 and level <= 2):
+            if cut == -1:
                 return Block(bid=self.ids.next("B"), kind="heading", level=level, label=label, heading=rest)
+            if level <= 2:
+                # 一、二级标题按惯例不带句号；带句号的是列项式正文（如“一、拟申请……。”），按句子检查
+                return Block(bid=self.ids.next("B"), kind="heading", level=level, label=label, heading="", sentences=self.sentences(rest), inline_heading=True)
             # 三、四级标题常与正文同段：“1.标题。正文……”
             head, body = rest[: cut + 1], rest[cut + 1 :]
             return Block(bid=self.ids.next("B"), kind="heading", level=level, label=label, heading=head, sentences=self.sentences(body), inline_heading=True)

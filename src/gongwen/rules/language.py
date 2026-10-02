@@ -140,6 +140,7 @@ def check_structure(ctx: CheckContext) -> list[ReviewIssue]:
     scopes = [ctx.ir.blocks] + [a.blocks for a in ctx.ir.attachments]
     for blocks in scopes:
         counters = {1: 0, 2: 0, 3: 0, 4: 0}
+        last_level = 0
         for b in blocks:
             if b.kind != "heading" or b.level not in LEVEL_RE:
                 # 段首序号标点
@@ -150,6 +151,18 @@ def check_structure(ctx: CheckContext) -> list[ReviewIssue]:
                         out.append(ctx.issue("GW-PUNC-002", IssueType.NUMBERING, f"{why}（应为“{fmt.format(m.group(1))}”）", block=b, sentence=b.sentences[0] if b.sentences else None, auto_fixable=True, fix_hint={"op": "label_punct"}))
                         break
                 continue
+            if b.level > last_level + 1:
+                names = {1: "“一、”", 2: "“（一）”", 3: "“1.”", 4: "“（1）”"}
+                out.append(
+                    ctx.issue(
+                        "GW-STRUCT-001",
+                        IssueType.NUMBERING,
+                        f"层次跳级：{names[b.level]}之上缺少{names[b.level - 1]}一级（结构层次序数依次为“一、”“（一）”“1.”“（1）”）",
+                        block=b,
+                        needs_human=True,
+                    )
+                )
+            last_level = b.level
             counters[b.level] += 1
             for deeper in range(b.level + 1, 5):
                 counters[deeper] = 0

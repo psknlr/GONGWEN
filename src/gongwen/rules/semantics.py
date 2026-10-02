@@ -37,6 +37,14 @@ class SemFeatures:
 _REQUIREMENT_CUES = ("确保", "要", "应当", "应", "须", "必须", "务必", "力争", "争取", "推动", "目标")
 
 
+_DONE_MARK = re.compile(r"(已经|业已|已)(经)?(新建|建成|完成|开展|实施|启动|投入|建设|落实|实现|新增|安排|拨付|下达|批准|同意|印发|出台|竣工|验收)")
+
+
+def done_marks(text: str) -> set[str]:
+    """句中明确的“已……”完成标记（按小句判断，避免被同句中的“计划于”掩盖）。"""
+    return {m.group(0) for m in _DONE_MARK.finditer(text)}
+
+
 def progress_of(text: str) -> Progress:
     """判断句子对事项进展的陈述：拟议 / 推进中 / 已完成 / 不涉及。
 
@@ -150,7 +158,8 @@ def check_fact_status(ctx: CheckContext) -> list[ReviewIssue]:
                 out.append(ctx.issue("GW-FACT-006", IssueType.CONFLICT_USED, f"{f.fact_id} 状态为“{f.status.value}”，未核清前不得使用", block=b, sentence=s, evidence=ev, evidence_text=_source_excerpt(f), needs_human=True))
                 continue
             planned = f.status == FactStatus.PROPOSED or f.progress == Progress.PLANNED
-            if planned and p in (Progress.COMPLETED, Progress.ONGOING):
+            new_done = done_marks(s.text) - done_marks(f.statement)
+            if planned and (p in (Progress.COMPLETED, Progress.ONGOING) or new_done):
                 out.append(
                     ctx.issue(
                         "GW-FACT-001",

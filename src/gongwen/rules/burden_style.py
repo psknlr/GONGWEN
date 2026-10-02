@@ -47,8 +47,8 @@ def check_empty_phrases(ctx: CheckContext) -> list[ReviewIssue]:
         if not hits:
             continue
         rest = _strip_empty(s.text)
-        # 去掉空泛表述后若只剩很少的实际内容（无数字、无具体对象），提示精简
-        if len(rest) < 12 and not _CONTENT_RE.search(rest):
+        # 去掉空泛表述后若只剩很少的实际内容（无数字、无具体对象），或同一句堆砌三处以上表态，提示精简
+        if (len(rest) < 12 and not _CONTENT_RE.search(rest)) or len(hits) >= 3:
             out.append(
                 ctx.issue(
                     "GW-STYLE-001",

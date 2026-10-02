@@ -43,8 +43,9 @@ PURPOSE_CUES: list[tuple[Purpose, tuple[str, ...]]] = [
 ]
 
 UP_CUES = ("向上级", "向主管部门", "主管部门", "上级机关", "上报", "呈报", "报送上级", "向市政府", "向省政府", "向区政府", "向县政府", "向市委", "向省委", "向集团", "向总部", "向主管单位", "报请")
-DOWN_CUES = ("各科室", "各单位", "各部门", "下属", "所属", "全院", "全校", "全所", "各区", "各县", "各乡镇", "各街道", "下发", "各处室", "各学院", "各分院", "基层")
-PARALLEL_CUES = ("兄弟单位", "不相隶属", "友邻", "商洽", "函告", "复函", "协助", "联系", "合作单位")
+# 注意：线索词不能是常见的事由用词（如“基层医疗”中的“基层”），否则会把事由误当成行文关系
+DOWN_CUES = ("各科室", "各单位", "各部门", "下属单位", "所属单位", "全院", "全校", "全所", "各区", "各县", "各乡镇", "各街道", "下发", "各处室", "各学院", "各分院")
+PARALLEL_CUES = ("兄弟单位", "不相隶属", "友邻", "商洽", "函告", "复函", "协助", "合作单位", "发函", "致函", "去函", "商请")
 REGIONS = (
     "北京市", "天津市", "上海市", "重庆市", "河北省", "山西省", "辽宁省", "吉林省", "黑龙江省", "江苏省", "浙江省", "安徽省",
     "福建省", "江西省", "山东省", "河南省", "湖北省", "湖南省", "广东省", "海南省", "四川省", "贵州省", "云南省", "陕西省",
@@ -96,6 +97,8 @@ def detect_purposes(text: str, requested: str | None) -> list[str]:
 
 
 def detect_direction(text: str, purposes: list[str]) -> str:
+    if any(c in text for c in PARALLEL_CUES) and not any(c in text for c in ("向上级", "上报", "呈报", "报请")):
+        return Direction.PARALLEL.value
     if any(c in text for c in UP_CUES):
         return Direction.UP.value
     if any(c in text for c in DOWN_CUES):
@@ -161,7 +164,13 @@ def extract_subject(text: str, genre: str | None) -> str:
             if t.endswith(name):
                 t = t[: -len(name)]
     t = t.rstrip("的").strip()
-    t = re.sub(r"^(向[^，。]{1,20}?)(申请|请求|报告|汇报|提出)", r"\2", t)
+    # “给××发函，商请……”“向××行文……”：收发文机关和行文动作不属于事由
+    t = re.sub(r"^(给|向|致|对)[^，。]{1,30}?(发函|去函|致函|行文|发文|写信|去信|发个函|发一个函)[，,、]?", "", t)
+    t = re.sub(r"^(向[^，。]{1,20}?)(申请|请求|报告|汇报|提出|请示)", r"\2", t)
+    if genre == "报告":
+        t = re.sub(r"^(报告|汇报)", "", t)
+    elif genre == "请示":
+        t = re.sub(r"^请示", "", t)
     t = re.sub(r"^关于", "", t)
     return t[:40] or "【待确认：事由】"
 
@@ -204,7 +213,9 @@ class TaskModelingSkill(Skill):
         text = request_text.strip()
         requested = kb.canonical_genre(hints.get("genre")) or detect_requested_genre(text)
         purposes = detect_purposes(text, requested)
-        direction = hints.get("direction") or detect_direction(text, purposes)
+        recips_hint = hints.get("recipients") or ""
+        recips_hint = "、".join(recips_hint) if isinstance(recips_hint, list) else str(recips_hint)
+        direction = hints.get("direction") or detect_direction(text + "\n" + recips_hint, purposes)
         genre, why = preliminary_genre(purposes, direction, requested)
         if genre and kb.genre(genre) and not kb.genre(genre).statutory and requested and requested != genre:
             pass

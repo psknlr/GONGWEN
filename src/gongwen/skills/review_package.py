@@ -26,6 +26,7 @@ from ..schemas.policy import PolicyPack
 from ..schemas.review import IssueType, ReviewReport
 from ..schemas.sources import AdmissionResult
 from ..schemas.state import Stage, TaskState
+from ..schemas.task import TaskSpec
 from ..workbench import build_page
 from .base import Skill, SkillContext
 
@@ -195,6 +196,17 @@ class ReviewPackageSkill(Skill):
                             "label": f"措施 {m.measure_id}",
                             "status": m.status,
                             "detail": {"主体": m.subject or "未明确", "行为": m.action, "对象": m.obj, "条件": m.condition, "时限": m.deadline, "义务强度": m.obligation, "例外": m.exceptions, "来源": m.origin, "原文": m.text},
+                        }
+                    )
+                elif r.kind == "task":
+                    spec = sc.load("task_spec", TaskSpec)
+                    refs.append(
+                        {
+                            "kind": "task",
+                            "id": r.id,
+                            "label": "办文需求（事由）",
+                            "status": spec.subject.status if spec else "任务契约",
+                            "detail": {"事由": str(spec.subject.value) if spec else "", "需求原文": spec.request_text if spec else "", "说明": r.note},
                         }
                     )
                 elif r.kind == "material":

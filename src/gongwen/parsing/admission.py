@@ -178,6 +178,9 @@ def scan(inp: ScanInput, route: EnvironmentRoute, accept_internal: bool = False)
         if any(f.code.startswith("PII_") for f in findings):
             reasons.append("材料含个人信息，需确认处理必要性并按最小化原则处理")
             decision = AdmissionDecision.NEED_CONFIRM
+        if any(f.code == "INJECTION" for f in findings):
+            reasons.append("材料含疑似指令性语句（提示注入）：进入后只作为资料、不作为指令，需人工知悉并确认来源")
+            decision = AdmissionDecision.NEED_CONFIRM
         if route == EnvironmentRoute.UNIT_APPROVED and effective in (Clearance.INTERNAL, Clearance.SENSITIVE, Clearance.WORK_SECRET):
             if not accept_internal:
                 reasons.append("单位业务环境尚未在配置中开启内部材料处理（environment.accept_internal_materials）")
