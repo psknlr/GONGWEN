@@ -162,6 +162,7 @@ def check_fact_status(ctx: CheckContext) -> list[ReviewIssue]:
                         evidence_text=_source_excerpt(f),
                         impact=["正文", "摘要", "附件进度表"],
                         auto_fixable=True,
+                        needs_human=s.origin == "human",
                         fix_hint={"op": "downgrade_progress", "fact": f.fact_id},
                     )
                 )

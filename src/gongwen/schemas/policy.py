@@ -47,6 +47,10 @@ class PolicyDocument(GWModel):
     content_hash: str | None = None
     verification: str = Field(default="待核", description="人工核验状态")
     synthetic: bool = Field(default=False, description="示例/合成数据，不得作为真实依据")
+    basis_role: str = Field(
+        default="substantive",
+        description="substantive=可作为事项的实体依据；procedural=约束行文、格式、程序与安全的规范，一般不在正文中作为实体依据引用",
+    )
     articles: list[PolicyArticle] = Field(default_factory=list)
     notes: str = ""
 
