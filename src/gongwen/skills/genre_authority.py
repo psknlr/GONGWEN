@@ -232,7 +232,7 @@ class GenreAuthoritySkill(Skill):
                 )
             )
         coord = [c for c in COORDINATION_CUES if c in text]
-        if coord:
+        if coord and d.suggested_genre != "纪要":  # 纪要记载会议议定事项，会议本身即协调机制
             d.procedures.append(
                 ProcedureRequirement(
                     code="CONSULTATION",

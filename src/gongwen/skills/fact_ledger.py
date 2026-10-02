@@ -36,6 +36,7 @@ _SUBSTANTIVE = re.compile(
     r"(问题|不足|困难|短板|制约|隐患|滞后|缺口|原因|主要是|建立|开展|推进|实施|落实|组织|完善|建设|采购|购置|培训|改造|负责|牵头|要求|决定|议定|同意|^为"
     r"|应当|必须|务必|须于|须在|要在|要于|确保|不得|严禁|完成|报送|提交)"
 )
+_MEETING_UNDECIDED = re.compile(r"(未作决定|未作出决定|未决定|未议定|未形成(决定|意见|结论)|不同意|暂不|暂缓|待研究|再研究|另行研究|进一步研究|需进一步|会后研究|未达成一致)")
 _CELL_PATH = re.compile(r"^(?:(?P<sheet>[^!]+)!(?P<col>[A-Z]{1,3})(?P<row>\d+)|table(?P<t>\d+)\.r(?P<r>\d+)\.c(?P<c>\d+))$")
 
 
@@ -172,7 +173,10 @@ class FactLedgerSkill(Skill):
                 as_of = m.group(1)
             loc = Locator(material_id=u.material_id, kind=u.kind, path=u.locator.path, excerpt=s[:80])
             if "meeting_record" in tags:
-                if any(w in s for w in ("决定", "议定", "同意", "明确", "确定")):
+                # 先看否定与待定语境：“会议未作决定”“暂不同意”“需进一步研究”不是议定事项
+                if _MEETING_UNDECIDED.search(s):
+                    tags = tags + ["meeting:discussion"]
+                elif any(w in s for w in ("决定", "议定", "同意", "明确", "确定")):
                     tags = tags + ["meeting:decided"]
                 elif any(w in s for w in ("讨论", "建议", "提出", "认为", "发言")):
                     tags = tags + ["meeting:discussion"]

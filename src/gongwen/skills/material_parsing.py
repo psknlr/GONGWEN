@@ -14,8 +14,10 @@ from ..schemas.sources import Material, SourceBundle, SourceRelation
 from ..schemas.state import Stage
 from .base import Skill, SkillContext
 
+_EXAMPLE_FILENAME = re.compile(r"(示例|样例|模板|范文|参考格式)")
+# 正文中的示例标记须是明确的标注（如“【示例】”“示例：”），不能把机关名称中的“示例”二字当成示例材料
 _ROLE_CUES = [
-    ("example", re.compile(r"(示例|样例|模板|范文|参考格式|填写说明|×××|XXX)")),
+    ("example", re.compile(r"(样例|模板|范文|参考格式|填写说明|×××|XXX|[（(【\[]示例[）)】\]]|示例[：:]|^示例$)", re.M)),
     ("approval_candidate", re.compile(r"(批复|同意.{0,20}的(复函|批复)|签批|审批意见|已批准)")),
     ("meeting_record", re.compile(r"(会议记录|会议纪要|会议议定|出席人员|主持人)")),
     ("policy_candidate", re.compile(r"(管理办法|实施细则|暂行规定|规定》|条例》|第[一二三四五六七八九十]+条)")),
@@ -27,6 +29,8 @@ _ROLE_CUES = [
 def guess_role(mat: Material, head_text: str) -> str:
     if mat.role and mat.role != "material":
         return mat.role
+    if _EXAMPLE_FILENAME.search(mat.filename):
+        return "example"
     probe = mat.filename + "\n" + head_text[:600]
     for role, rx in _ROLE_CUES:
         if rx.search(probe):

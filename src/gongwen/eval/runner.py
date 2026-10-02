@@ -326,6 +326,20 @@ def _expect_pipeline(eng, st, exp: dict[str, Any], admissions: list) -> tuple[li
                 add(f"event:{x}", x in types)
         elif k == "finding_codes":
             continue  # 准入用例在 run_case 中单独核对
+        elif k in ("section_contains", "section_not_contains"):
+            secs = _sections(ir) if ir else {}
+            for heading, items in v.items():
+                body = secs.get(heading)
+                if body is None:
+                    add(f"section:{heading}", False, "无此章节：" + "、".join(secs))
+                    continue
+                for x in items:
+                    ok = (x in body) if k == "section_contains" else (x not in body)
+                    add(f"{'in' if k == 'section_contains' else 'not_in'}:{heading}:{x}", ok, body[:60])
+        elif k == "max_occurrences":
+            for x, n in v.items():
+                cnt = text.count(x)
+                add(f"occurrences:{x}", cnt <= n, f"{cnt} 次")
         elif k == "attachment_table_contains":
             cells = " ".join(" ".join(r) for a in (ir.attachments if ir else []) for b in a.blocks if b.table for r in b.table)
             for x in v:
@@ -379,6 +393,19 @@ def _fabricated_numbers(case: dict[str, Any], text: str) -> list[str]:
         v = float(n.value) if isinstance(n.value, (int, float)) else None
         if n.raw not in known and (v is None or v not in known):
             out.append(n.raw)
+    return out
+
+
+def _sections(ir) -> dict[str, str]:
+    """一级标题 → 该节正文（用于核对内容是否落在正确的章节）。"""
+    out: dict[str, str] = {}
+    cur = None
+    for b in ir.blocks:
+        if b.kind == "heading" and b.level == 1:
+            cur = b.heading
+            out[cur] = "".join(s.text for s in b.sentences)
+        elif cur is not None:
+            out[cur] += b.text()
     return out
 
 

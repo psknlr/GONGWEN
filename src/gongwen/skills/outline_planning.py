@@ -29,6 +29,9 @@ CONDITION_RE = re.compile(r"((?:如|若|确有|必要时|对于|凡)[^，。；]
 EXCEPTION_RE = re.compile(r"(除[^，。；]{1,30}外)")
 SUBJECT_RE = re.compile(r"^([一-鿿]{2,20}?(?:委员会|局|厅|办公室|处|科|中心|医院|学院|大学|部门|单位|各[一-鿿]{1,6}))(?:负责|牵头|要|应|将|拟|按照|组织)")
 REQUIREMENT_RE = re.compile(r"(负责|牵头|要|应当|须|必须|务必|请各|责任单位)")
+MEASURE_ROLES = ("proposal", "plans", "items", "tasks", "next", "goal", "suggestions", "division", "schedule")
+DIVISION_RE = re.compile(r"(负责|牵头|配合|协助|分工|责任单位)")
+GOAL_RE = re.compile(r"(目标|拟新建|新建|建成|达到|覆盖率|提升至|提高到|实现)")
 PROBLEM_CUES = ("问题", "不足", "困难", "短板", "制约", "瓶颈", "滞后", "缺口", "不够", "不强", "不高", "隐患")
 
 GENRE_SECTIONS: dict[str, list[tuple[str, str, str]]] = {
@@ -111,6 +114,10 @@ class OutlinePlanningSkill(Skill):
             m = extract_measure(sc.ids, f.statement, f)
             m.resources = [x.fact_id for x in money if x.statement == f.statement]
             plan.measures.append(m)
+        # 作为措施来源的句子不再作为“情况”重复陈述
+        measure_sources = {r.id for m in plan.measures for r in m.basis if r.kind == "fact"}
+        done_or_ongoing = [f for f in done_or_ongoing if f.fact_id not in measure_sources]
+        assigned = self._distribute(plan.measures, [r for r, _, _ in (GENRE_SECTIONS.get(doc_kind) or [])])
         # ---- 开头段
         plan.opening = ParagraphPlan(
             para_id=sc.ids.next("PP"),
@@ -128,12 +135,14 @@ class OutlinePlanningSkill(Skill):
             sec = SectionPlan(section_id=sc.ids.next("S"), heading=heading, role=role)
             pick: list[Fact] = []
             measure_ids: list[str] = []
-            if role in ("facts", "work", "overview", "results", "findings", "method", "scope", "situation"):
+            if role == "scope":
+                pick = [f for f in done_or_ongoing if re.search(r"范围|覆盖|对象|适用于|涉及", f.statement)][:4]
+            elif role in ("facts", "work", "overview", "results", "findings", "method", "situation"):
                 pick = [f for f in done_or_ongoing if f.kind != "plain" and "computed" not in f.tags][:8]
             elif role in ("problems", "analysis"):
                 pick = problems[:5]
-            elif role in ("proposal", "plans", "items", "tasks", "next", "goal", "suggestions", "division", "schedule"):
-                measure_ids = [m.measure_id for m in plan.measures][:8]
+            elif role in MEASURE_ROLES:
+                measure_ids = assigned.get(role, [])[:8]
             elif role == "resources":
                 pick = (computed + [f for f in money if f.status == FactStatus.PROPOSED])[:6]
                 if not pick and spec.resource_mentions:
@@ -194,8 +203,31 @@ class OutlinePlanningSkill(Skill):
         return plan
 
     @staticmethod
+    def _distribute(measures: list[Measure], roles: list[str]) -> dict[str, list[str]]:
+        """把措施分到各章节，每项只出现一次：职责分工 > 工作目标 > 任务类章节；
+        只有没有任务类章节时，带时限的措施才进入“进度安排”。缺少的章节以待补占位，不重复填充。"""
+        present = [r for r in roles if r in MEASURE_ROLES]
+        out: dict[str, list[str]] = {r: [] for r in present}
+        task_role = next((r for r in present if r not in ("division", "goal", "schedule")), None)
+        for m in measures:
+            if "division" in out and DIVISION_RE.search(m.text):
+                out["division"].append(m.measure_id)
+            elif "goal" in out and GOAL_RE.search(m.text) and re.search(r"\d", m.text):
+                out["goal"].append(m.measure_id)
+            elif task_role:
+                out[task_role].append(m.measure_id)
+            elif "schedule" in out and m.deadline:
+                out["schedule"].append(m.measure_id)
+            elif present:
+                out[present[0]].append(m.measure_id)
+        return out
+
+    @staticmethod
     def _title(issuer: str, subject: str, genre: GenreDecision) -> str:
         subject = subject.strip()
+        if genre.suggested_genre == "纪要":
+            meeting = re.sub(r"(的)?(会议)?(纪要)?$", "", subject).strip("的") or "【待补：会议名称】"
+            return f"{meeting}{'会议' if not meeting.endswith(('会', '会议')) else ''}纪要"
         if genre.material_type and genre.suggested_genre == "通知":
             core = f"关于印发《{subject}{'' if subject.endswith(genre.material_type) else genre.material_type}》的通知"
         elif genre.material_type:

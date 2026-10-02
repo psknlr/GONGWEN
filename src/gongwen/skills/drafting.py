@@ -229,10 +229,17 @@ class Drafter:
                 if sec.role == "resources":
                     sents += self.resource_request_sentences()
                 if not sents:
+                    gi_ = kb.genre(self.doc_kind)
+                    required = {c["key"] for c in (gi_.contract if gi_ else []) if c.get("required")}
                     if sec.role in ("requirements",):
                         sents = [self.sent(self.placeholder("requirements", "执行要求（如完成时限、报送方式、联系人）") , [], "要求")]
+                    elif sec.role in required and sec.role in ("division", "schedule", "scope", "goal"):
+                        # 内容契约要求的部分：以待补占位提示缺失，不擅自补写责任、进度与指标
+                        sents = [self.sent(self.placeholder(sec.role, f"{sec.heading}（材料中未提供，系统不代为确定）"), [], p.function)]
                     elif sec.role in ("pending", "problems", "evaluation", "division", "schedule", "scope", "goal"):
                         continue
+                    elif gi_ and any(c["key"] == sec.role and not c.get("required", True) for c in gi_.contract):
+                        continue  # 契约中的可选部分：没有材料就不写
                     else:
                         sents = [self.sent(self.placeholder(sec.role, f"{sec.heading or sec.role}相关内容"), [], p.function)]
                 content.append(self.para(sents, p.para_id))

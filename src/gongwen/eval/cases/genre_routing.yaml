@@ -220,3 +220,66 @@
   expect:
     genre: 请示
     max_issues: {阻断送审: 0, 重要: 0}
+
+- id: GR-14
+  task_group: single
+  kind: pipeline
+  title: 纪要只写确已议定事项，建议与未决事项列为待研究
+  request: 根据会议记录整理一份示范点建设推进会的会议纪要
+  hints: {issuer_type: 政府部门}
+  materials:
+    - name: 会议记录.md
+      text: |
+        示范点建设推进会会议记录
+
+        2026年3月5日，示例市卫生健康委员会召开示范点建设推进会，委主任李某主持。
+
+        会议决定，2026年新建示范点12个，由规划发展处牵头组织实施。
+
+        会议同意将示范点验收时间定为2026年12月底前。
+
+        规划发展处张某建议增加2个示范点，会议未作决定。
+
+        财务处提出经费缺口约30万元，需进一步测算。
+  accept: [task_confirm, outline_confirm]
+  expect:
+    stage: 人工送审
+    genre: 纪要
+    title_suffix: 推进会纪要
+    draft_contains: [委主任李某主持, 会议决定，2026年新建示范点12个]
+    section_contains:
+      会议议定事项: [新建示范点12个, 验收时间]
+      待研究事项: [建议增加2个示范点, 经费缺口]
+    section_not_contains:
+      会议议定事项: [建议增加2个示范点, 经费缺口]
+
+- id: GR-15
+  task_group: single
+  kind: pipeline
+  title: 工作方案按契约分节、措施不重复，缺失的范围与进度以待补提示而不擅自补写
+  request: 起草一份2026年基层医疗示范点建设工作方案
+  hints: {issuer_type: 政府部门}
+  materials:
+    - name: 工作安排.md
+      text: |
+        2026年基层医疗示范点建设工作安排
+
+        2026年拟新建示范点12个。
+
+        各区卫生健康局要在2026年6月底前完成选址。
+
+        各区卫生健康局应当于2026年12月底前完成示范点建设并组织验收。
+
+        市卫生健康委负责统筹协调和技术指导。
+  accept: [task_confirm, outline_confirm]
+  expect:
+    stage: 人工送审
+    genre: 工作方案
+    section_contains:
+      工作目标: [拟新建示范点12个]
+      主要任务: [完成选址, 组织验收]
+      职责分工: [负责统筹协调]
+      工作范围: [【待补]
+      进度安排: [【待补]
+    max_occurrences: {完成选址: 1, 负责统筹协调: 1}
+

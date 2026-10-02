@@ -159,6 +159,7 @@ def preliminary_genre(purposes: list[str], direction: str, requested: str | None
 def extract_subject(text: str, genre: str | None) -> str:
     t = re.sub(r"^(请|麻烦|帮我|帮忙|需要|拟|我想|我要)?(帮我|给我)?(起草|写|拟写|拟|撰写|草拟|准备)?(一份|一个|个|篇|一篇)?", "", text.strip())
     t = re.sub(r"(。|！|\?|？)$", "", t)
+    t = re.sub(r"^(根据|依据|按照)[^，。]{0,16}?(整理|形成|起草|撰写|写)(出)?(一份|一个|一篇)?", "", t)
     if genre:
         for name in {genre, genre.replace("（令）", ""), "会议纪要"}:
             if t.endswith(name):
