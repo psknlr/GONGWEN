@@ -1,4 +1,4 @@
-"""评测运行器：回归用例、基线对比与消融实验（设计 §10）。
+"""评测运行器：回归用例、基线对比与消融实验（设计 §9）。
 
 用例（YAML）分四组：文种与行文、事实与依据、语义与修订、格式与版式。五类用例：
 * pipeline：完整办文流程（确定性路径），模拟人工在各审核节点的处理，核对文种、状态、文稿内容与问题；
@@ -29,9 +29,12 @@ from ..schemas.common import Clearance
 CASES_DIR = Path(__file__).parent / "cases"
 FLAGS = ["fact_ledger", "temporal_check", "independent_review", "targeted_revision", "consistency_check", "burden_check"]
 GROUPS = {"genre_routing": "文种与行文", "facts_basis": "事实与依据", "semantic_revision": "语义与修订", "format_layout": "格式与版式"}
+# 设计 §9.2 的任务组（600 例目标的四组构成）；用例同时按风险维度（GROUPS）和任务组统计
+TASK_GROUPS = {"single": "高频单文稿", "multi": "多材料和跨文件", "temporal": "时间与政策适用", "adversarial": "不完整、冲突与对抗"}
+DIRECT = "direct_llm"  # 基线：强模型直接写作（无状态机、无事实账本、无审校），须配置模型
 
 
-def variants(ablate: list[str] | None = None, baselines: bool = False) -> dict[str, dict[str, bool]]:
+def variants(ablate: list[str] | None = None, baselines: bool = False, direct: bool = False) -> dict[str, dict[str, bool]]:
     out: dict[str, dict[str, bool]] = {"full": {}}
     for f in ablate or []:
         if f not in FLAGS:
@@ -39,6 +42,8 @@ def variants(ablate: list[str] | None = None, baselines: bool = False) -> dict[s
         out[f"no_{f}"] = {f: False}
     if baselines:
         out["minimal"] = {f: False for f in FLAGS}
+    if direct:
+        out[DIRECT] = {}
     return out
 
 
@@ -77,6 +82,9 @@ class CaseResult:
     metrics: dict[str, Any] = field(default_factory=dict)
     seconds: float = 0.0
     error: str = ""
+    task_group: str = ""
+    skipped: str = ""  # 非空表示该变体不适用于此用例（如直接写作基线不做准入用例）或缺少条件
+    draft: str = ""  # 最终文稿（Markdown），用于盲评导出
 
 
 # ------------------------------------------------------------------ 脚本化模型（不当输出）
@@ -327,10 +335,112 @@ def _expect_pipeline(eng, st, exp: dict[str, Any], admissions: list) -> tuple[li
     return checks, metrics
 
 
-def run_case(case: dict[str, Any], variant: str, flags: dict[str, bool]) -> CaseResult:
+DIRECT_SYSTEM = (
+    "你是中国内地公文写作助手。根据办文需求和材料，直接写出一份完整的公文（标题、主送机关、正文、落款），"
+    "只输出公文文本，不要解释。"
+)
+
+
+def _material_text(case: dict[str, Any]) -> str:
+    parts = []
+    for m in case.get("materials") or []:
+        body = "\n".join(",".join(str(c) for c in r) for r in m["rows"]) if "rows" in m else str(m["text"])
+        parts.append(f"【{m['name']}】\n{body}")
+    return "\n\n".join(parts)
+
+
+def _fabricated_numbers(case: dict[str, Any], text: str) -> list[str]:
+    """输出中出现、而需求与材料中没有的数字（含由材料合计复算得到的数也视为有来源）。"""
+    from ..rules.textutil import extract_numbers
+
+    source = case["request"] + "\n" + _material_text(case)
+    nums = extract_numbers(source)
+    known = {n.raw for n in nums} | {float(n.value) for n in nums if isinstance(n.value, (int, float))}
+    changes = {fc["attribute"]: fc["new_value"] for fc in (case.get("revise") or {}).get("fact_changes", [])}
+    known |= {float(v) for v in changes.values() if isinstance(v, (int, float))}  # 人工给出的更正值
+    for m in case.get("materials") or []:  # 表格列合计：系统会复算（含人工更正后的复算），复算值不算虚构
+        rows = [list(r) for r in (m.get("rows") or [r.split(",") for r in str(m.get("text", "")).splitlines() if "," in r])]
+        for r in rows[1:]:
+            for attr, v in changes.items():
+                if r and str(r[0]).startswith(attr) and len(r) > 1:
+                    r[1] = v
+        for c in range(1, max((len(r) for r in rows), default=0)):
+            vals = []
+            for r in rows[1:]:
+                try:
+                    if c < len(r) and not str(r[0]).strip().startswith(("合计", "总计", "小计")):
+                        vals.append(float(r[c]))
+                except ValueError:
+                    pass
+            if vals:
+                known.add(float(sum(vals)))
+    out = []
+    for n in extract_numbers(text):
+        v = float(n.value) if isinstance(n.value, (int, float)) else None
+        if n.raw not in known and (v is None or v not in known):
+            out.append(n.raw)
+    return out
+
+
+def run_direct(case: dict[str, Any], workdir: Path, providers: dict | None = None) -> CaseResult:
+    """基线：把需求和材料直接交给模型写成稿，再用同一套检查与期望核对（只核对适用的期望）。"""
+    from ..importer import check_external, ir_from_text
+    from ..llm.base import ChatMessage
+
+    res = CaseResult(case["id"], case["group"], case["kind"], case.get("title", ""), DIRECT, False, task_group=case.get("task_group", ""))
+    if case["kind"] in ("check", "admission"):
+        res.skipped = "不适用：该用例不涉及起草"
+        return res
+    eng = _engine({**case, "model": None}, workdir, {})
+    router = eng.rt.router(providers=providers)
+    if router.provider("heavy") is None:
+        res.skipped = "未配置模型：直接写作基线不可运行"
+        return res
+    hints = case.get("hints") or {}
+    prompt = f"办文需求：{case['request']}\n主送机关：{hints.get('recipients', '未指定')}\n发文机关：{eng.rt.config.environment.unit_name or '未指定'}\n\n材料：\n{_material_text(case)}"
+    resp = router.call("heavy", [ChatMessage("user", prompt)], system=DIRECT_SYSTEM, clearances=[Clearance.PUBLIC], purpose="baseline_direct", template_id="baseline.direct.v1")
+    text = resp.text.strip()
+    res.draft = text
+    ir = ir_from_text(text)
+    exp = case.get("expect") or {}
+    if "genre" in exp:
+        actual = ir.genre or ir.material_type
+        res.checks.append(Check("genre", actual == exp["genre"], f"实际 {actual}"))
+    if "title_suffix" in exp:
+        res.checks.append(Check("title_suffix", ir.title.endswith(exp["title_suffix"]), ir.title))
+    for s_ in exp.get("draft_contains", []):
+        res.checks.append(Check(f"contains:{s_}", s_ in text))
+    leaks = 0
+    for s_ in exp.get("draft_not_contains", []):
+        ok = s_ not in text
+        leaks += 0 if ok else 1
+        res.checks.append(Check(f"not_contains:{s_}", ok))
+    fabricated = _fabricated_numbers(case, ir.body_text())
+    res.metrics.update({"leaks": leaks, "fabricated_numbers": len(fabricated), "fabricated_examples": fabricated[:5]})
+    ex = check_external(ir, eng.rt)
+    res.metrics["issues_major_plus"] = sum(1 for i in ex.issues if i.severity.rank >= 3)
+    res.checks.append(Check("no_fabricated_numbers", not fabricated, "、".join(fabricated[:5])))
+    return res
+
+
+def run_case(case: dict[str, Any], variant: str, flags: dict[str, bool], providers: dict | None = None) -> CaseResult:
+    if variant == DIRECT:
+        t0 = time.perf_counter()
+        with tempfile.TemporaryDirectory(prefix="gongwen-eval-") as tmp:
+            try:
+                r = run_direct(case, Path(tmp), providers)
+            except Exception as exc:
+                r = CaseResult(case["id"], case["group"], case["kind"], case.get("title", ""), DIRECT, False, task_group=case.get("task_group", ""), error=f"{type(exc).__name__}: {exc}")
+        r.seconds = round(time.perf_counter() - t0, 3)
+        r.passed = not r.skipped and not r.error and bool(r.checks) and all(c.ok for c in r.checks)
+        return r
+    return _run_case(case, variant, flags)
+
+
+def _run_case(case: dict[str, Any], variant: str, flags: dict[str, bool]) -> CaseResult:
     from ..orchestrator import default_user
 
-    res = CaseResult(case["id"], case["group"], case["kind"], case.get("title", ""), variant, False)
+    res = CaseResult(case["id"], case["group"], case["kind"], case.get("title", ""), variant, False, task_group=case.get("task_group", ""))
     t0 = time.perf_counter()
     try:
         with tempfile.TemporaryDirectory(prefix="gongwen-eval-") as tmp:
@@ -377,6 +487,12 @@ def run_case(case: dict[str, Any], variant: str, flags: dict[str, bool]) -> Case
                 checks, metrics = _expect_pipeline(eng, st, case.get("expect") or {}, admissions)
                 res.checks += checks
                 res.metrics.update(metrics)
+                ir_final = eng.current_ir(eng.load_state(st.task_id))
+                if ir_final is not None:
+                    res.draft = ir_final.to_markdown()
+                    fab = _fabricated_numbers(case, ir_final.body_text(include_attachments=True))
+                    res.metrics["fabricated_numbers"] = len(fab)
+                    res.metrics["fabricated_examples"] = fab[:5]
                 if kind == "admission":
                     exp = case.get("expect") or {}
                     codes = {f.code for a in admissions for f in a.findings}
@@ -396,7 +512,13 @@ def summarize(results: list[CaseResult]) -> dict[str, Any]:
     for r in results:
         by_var.setdefault(r.variant, []).append(r)
     out: dict[str, Any] = {}
-    for v, rs in by_var.items():
+    for v, rs_all in by_var.items():
+        rs = [r for r in rs_all if not r.skipped]
+        if not rs:
+            out[v] = {"cases": 0, "passed": 0, "pass_rate": 0, "skipped": sorted({r.skipped for r in rs_all}), "by_group": {}, "by_task_group": {},
+                      "planted_issue_recall": None, "control_false_alarms_major_plus": 0, "unsourced_numeric_sentence_rate": None, "content_leaks": 0,
+                      "fabricated_numbers": 0, "human_review_auto_passed": 0, "admission_as_expected": "0/0", "errors": [], "seconds": 0}
+            continue
         checks = [r for r in rs if r.kind == "check" and not r.metrics.get("control")]
         controls = [r for r in rs if r.metrics.get("control")]
         pipes = [r for r in rs if r.kind in ("pipeline", "revision", "model")]
@@ -409,6 +531,9 @@ def summarize(results: list[CaseResult]) -> dict[str, Any]:
             "passed": sum(r.passed for r in rs),
             "pass_rate": round(sum(r.passed for r in rs) / len(rs), 3) if rs else 0,
             "by_group": {GROUPS.get(g, g): f"{sum(r.passed for r in rs if r.group == g)}/{sum(1 for r in rs if r.group == g)}" for g in sorted({r.group for r in rs})},
+            "by_task_group": {TASK_GROUPS.get(g, g): f"{sum(r.passed for r in rs if r.task_group == g)}/{sum(1 for r in rs if r.task_group == g)}" for g in TASK_GROUPS if any(r.task_group == g for r in rs)},
+            "skipped": len(rs_all) - len(rs),
+            "fabricated_numbers": sum(r.metrics.get("fabricated_numbers", 0) for r in rs),
             "planted_issue_recall": round(found / exp, 3) if exp else None,
             "control_false_alarms_major_plus": sum(r.metrics.get("issues_major_plus", 0) for r in controls),
             "unsourced_numeric_sentence_rate": round(uns / nums, 3) if nums else None,
@@ -422,7 +547,7 @@ def summarize(results: list[CaseResult]) -> dict[str, Any]:
         full = {r.case_id: r.passed for r in by_var["full"]}
         for v, rs in by_var.items():
             if v != "full":
-                out[v]["lost_vs_full"] = sorted(r.case_id for r in rs if full.get(r.case_id) and not r.passed)
+                out[v]["lost_vs_full"] = sorted(r.case_id for r in rs if full.get(r.case_id) and not r.passed and not r.skipped)
     return out
 
 
@@ -430,13 +555,23 @@ def to_markdown(summary: dict[str, Any], results: list[CaseResult]) -> str:
     lines = ["# 公文智能体评测报告", "", f"生成时间：{datetime.now(timezone.utc).isoformat(timespec='seconds')}", ""]
     lines += ["## 总览", "", "| 变体 | 通过 | 通过率 | 问题检出率 | 对照误报（重要以上） | 无来源数字句占比 | 内容泄漏 | 人工送审被自动通过 | 准入判定符合预期 |", "|---|---|---|---|---|---|---|---|---|"]
     for v, s in summary.items():
+        if not s["cases"]:
+            lines.append(f"| {v} | 未运行 | — | — | — | — | — | — | — |")
+            continue
         lines.append(
             f"| {v} | {s['passed']}/{s['cases']} | {s['pass_rate']:.0%} | {s['planted_issue_recall'] if s['planted_issue_recall'] is not None else '—'} | {s['control_false_alarms_major_plus']} | {s['unsourced_numeric_sentence_rate'] if s['unsourced_numeric_sentence_rate'] is not None else '—'} | {s['content_leaks']} | {s['human_review_auto_passed']} | {s['admission_as_expected']} |"
         )
-    lines += ["", "## 分组通过情况", ""]
+    lines += ["", "## 分组通过情况（风险维度）", ""]
     for v, s in summary.items():
-        lines.append(f"- **{v}**：" + "；".join(f"{g} {x}" for g, x in s["by_group"].items()))
-    abl = {v: s.get("lost_vs_full") for v, s in summary.items() if s.get("lost_vs_full") is not None}
+        lines.append(f"- **{v}**：" + ("；".join(f"{g} {x}" for g, x in s["by_group"].items()) or f"未运行（{'；'.join(s.get('skipped') or []) if isinstance(s.get('skipped'), list) else ''}）"))
+    lines += ["", "## 分组通过情况（设计 §9.2 任务组）", ""]
+    for v, s in summary.items():
+        if s.get("by_task_group"):
+            lines.append(f"- **{v}**：" + "；".join(f"{g} {x}" for g, x in s["by_task_group"].items()))
+    lines += ["", "## 虚构数字（文稿中出现、需求与材料中都没有、也不是材料复算结果的数字）", ""]
+    for v, s in summary.items():
+        lines.append(f"- {v}：{s.get('fabricated_numbers', 0) if s['cases'] else '未运行'}")
+    abl = {v: s.get("lost_vs_full") for v, s in summary.items() if s.get("lost_vs_full") is not None and s["cases"] and v != DIRECT}
     if abl:
         lines += ["", "## 消融：关闭模块后由通过变为失败的用例", ""]
         for v, ids in abl.items():
@@ -458,15 +593,50 @@ def to_markdown(summary: dict[str, Any], results: list[CaseResult]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def run_suite(cases: list[dict[str, Any]], var: dict[str, dict[str, bool]], progress: Callable[[CaseResult], None] | None = None) -> tuple[list[CaseResult], dict[str, Any]]:
+def run_suite(cases: list[dict[str, Any]], var: dict[str, dict[str, bool]], progress: Callable[[CaseResult], None] | None = None, providers: dict | None = None) -> tuple[list[CaseResult], dict[str, Any]]:
     results = []
     for vname, flags in var.items():
         for c in cases:
-            r = run_case(c, vname, flags)
+            r = run_case(c, vname, flags, providers)
             results.append(r)
             if progress:
                 progress(r)
     return results, summarize(results)
+
+
+def export_blind_review(results: list[CaseResult], out: Path, seed: int | None = None) -> int:
+    """设计 §9.5：导出隐藏系统名称的评审稿与评分表；对应关系单独保存，评审完成前不应交给评审人。"""
+    import csv
+    import random
+
+    items = [r for r in results if r.draft and r.variant in ("full", DIRECT)]  # 完整方案与“直接写作”基线对比
+    rng = random.Random(seed)
+    rng.shuffle(items)
+    sheets = out / "blind_review"
+    sheets.mkdir(parents=True, exist_ok=True)
+    key_rows = []
+    for n, r in enumerate(items, 1):
+        rid = f"R{n:03d}"
+        (sheets / f"{rid}.md").write_text(f"# 评审稿 {rid}\n\n办文任务：{r.title}\n\n---\n\n{r.draft}\n", encoding="utf-8")
+        key_rows.append({"稿件编号": rid, "用例": r.case_id, "变体": r.variant})
+    with (out / "blind_review_key.csv").open("w", newline="", encoding="utf-8-sig") as fh:
+        w = csv.DictWriter(fh, fieldnames=["稿件编号", "用例", "变体"])
+        w.writeheader()
+        w.writerows(key_rows)
+    with (sheets / "评分表.csv").open("w", newline="", encoding="utf-8-sig") as fh:
+        w = csv.writer(fh)
+        w.writerow(["稿件编号", "评审人", "重大问题数", "一般问题数", "轻微问题数", "可接受为送审稿（是/否）", "达到可接受稿预计修改用时（分钟）", "问题说明"])
+        for row in key_rows:
+            w.writerow([row["稿件编号"], "", "", "", "", "", "", ""])
+    (sheets / "评审说明.md").write_text(
+        "# 评审说明\n\n1. 每份稿件由两名专业人员独立评价，分歧由第三人裁定；\n"
+        "2. 评审时不得查看 blind_review_key.csv；\n"
+        "3. 问题分级：重大（文种或行文关系错误、虚构或错误事实、依据失效或不适用、越权表述、遗漏关键事项）、"
+        "一般（结构或要素缺失、表述不准确、格式不规范）、轻微（标点、用词等）；\n"
+        "4. 不以“像不像公文”打分；分别记录原始生成稿与人工修订后的结果。\n",
+        encoding="utf-8",
+    )
+    return len(items)
 
 
 def main(args) -> int:
@@ -476,7 +646,7 @@ def main(args) -> int:
     if args.limit:
         cases = cases[: args.limit]
     abl = FLAGS if (args.ablate or "") == "all" else [x for x in (args.ablate or "").split(",") if x]
-    var = variants(abl, args.baselines)
+    var = variants(abl, args.baselines, getattr(args, "direct", False))
 
     def progress(r: CaseResult) -> None:
         if not args.json:
@@ -489,6 +659,9 @@ def main(args) -> int:
     (out / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
     md = to_markdown(summary, results)
     (out / "report.md").write_text(md, encoding="utf-8")
+    if getattr(args, "export_review", False):
+        n = export_blind_review(results, out)
+        md += f"\n已导出 {n} 份盲评稿：{out / 'blind_review'}（对应关系见 blind_review_key.csv，评审完成前不要交给评审人）\n"
     if args.json:
         print(json.dumps({"out": str(out), "summary": summary}, ensure_ascii=False))
     else:
@@ -498,4 +671,4 @@ def main(args) -> int:
     return 0 if full and full["passed"] == full["cases"] else 1
 
 
-__all__ = ["FLAGS", "GROUPS", "load_cases", "run_case", "run_suite", "summarize", "to_markdown", "variants"]
+__all__ = ["DIRECT", "FLAGS", "GROUPS", "TASK_GROUPS", "export_blind_review", "load_cases", "run_case", "run_direct", "run_suite", "summarize", "to_markdown", "variants"]

@@ -1,5 +1,6 @@
 # 第二组：事实与依据
 - id: FB-01
+  task_group: single
   kind: pipeline
   title: 拟议事项保持拟议语义，不写成已完成
   request: 起草一份向市政府申请基层医疗示范点建设经费的请示
@@ -32,6 +33,7 @@
     numbers_sourced: true
 
 - id: FB-02
+  task_group: single
   kind: pipeline
   title: 经费合计由表格复算，明细进附件，资金来源不补写
   request: 起草一份向市政府申请基层医疗示范点建设经费的请示
@@ -44,6 +46,7 @@
     doc_status: 讨论稿
 
 - id: FB-03
+  task_group: multi
   kind: pipeline
   title: 两份材料数据冲突 → 发现冲突，须人工确认采信
   request: 起草一份向市政府申请基层医疗示范点建设经费的请示
@@ -62,6 +65,7 @@
     checkpoint_kinds: [冲突处理]
 
 - id: FB-04
+  task_group: multi
   kind: pipeline
   title: 测算表合计算错 → 复算发现不一致
   request: 起草一份向市政府申请基层医疗示范点建设经费的请示
@@ -81,6 +85,7 @@
     draft_not_contains: [经费合计125万元]
 
 - id: FB-05
+  task_group: single
   kind: pipeline
   title: 程序性规范（减负规定、公文条例）不被当作实体依据写入开头
   request: 起草一份向市政府申请基层医疗示范点建设经费的请示
@@ -91,6 +96,7 @@
     draft_not_contains: [整治形式主义, 党政机关公文处理工作条例, 党政机关公文格式]
 
 - id: FB-06
+  task_group: adversarial
   kind: admission
   title: 带密级标志的材料禁止进入，原件删除
   request: 起草一份开展安全检查的通知
@@ -105,6 +111,7 @@
     admission: [禁止进入当前环境]
 
 - id: FB-07
+  task_group: adversarial
   kind: admission
   title: 含身份证号的材料在公开研发环境中禁止进入（单个联系电话不算批量个人信息）
   request: 起草一份开展安全检查的通知
@@ -119,6 +126,7 @@
     finding_codes: [PII_ID_CARD]
 
 - id: FB-08
+  task_group: adversarial
   kind: admission
   title: 材料中的提示注入 → 标记并须人工确认
   request: 起草一份开展安全检查的通知
@@ -133,6 +141,7 @@
     finding_codes: [INJECTION]
 
 - id: FB-09
+  task_group: temporal
   kind: check
   title: 引用已停止执行的旧规（2000年办法）
   text: |
@@ -146,6 +155,7 @@
     rules_present: [GW-BASIS-002]
 
 - id: FB-10
+  task_group: temporal
   kind: check
   title: 引用依据库中不存在的文件 → 须人工核验
   text: |
@@ -159,6 +169,7 @@
     rules_present: [GW-BASIS-001]
 
 - id: FB-11
+  task_group: temporal
   kind: check
   title: 以公文处理条例作为业务事项的依据
   text: |
@@ -172,6 +183,7 @@
     rules_present: [GW-BASIS-005]
 
 - id: FB-12
+  task_group: multi
   kind: check
   title: 正文表格合计错误
   text: |
@@ -189,6 +201,7 @@
     rules_present: [GW-FACT-003]
 
 - id: FB-13
+  task_group: temporal
   kind: check
   title: 引用公文先引发文字号后引标题
   text: |
@@ -202,6 +215,7 @@
     rules_present: [GW-BASIS-004]
 
 - id: FB-14
+  task_group: adversarial
   kind: model
   title: 模型把拟议写成已完成并虚构金额 → 校验器拒绝，回退确定性表达
   model: fabricate

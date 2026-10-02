@@ -1,5 +1,6 @@
 # 第三组：语义与修订
 - id: SR-01
+  task_group: multi
   kind: revision
   title: 关键事实变更联动正文合计与附件表格
   request: 起草一份向市政府申请基层医疗示范点建设经费的请示
@@ -35,6 +36,7 @@
     attachment_table_contains: ["40", "100"]
 
 - id: SR-02
+  task_group: adversarial
   kind: revision
   title: 人工把“拟新建”改成“已新建” → 事实状态升级被标出并转人工
   request: 起草一份向市政府申请基层医疗示范点建设经费的请示
@@ -49,6 +51,7 @@
     doc_status: 讨论稿
 
 - id: SR-03
+  task_group: adversarial
   kind: revision
   title: 人工写入“经市政府批准” → 未经真实批准不得写成已批准
   request: 起草一份向市政府申请基层医疗示范点建设经费的请示
@@ -62,6 +65,7 @@
     rules_present: [GW-SEM-006]
 
 - id: SR-04
+  task_group: multi
   kind: revision
   title: 人工修改引入半角标点 → 定向修订自动纠正（机械性问题）
   request: 起草一份向市政府申请基层医疗示范点建设经费的请示
@@ -76,6 +80,7 @@
     draft_contains: [已建成基层医疗示范点8个，覆盖5个区]
 
 - id: SR-05
+  task_group: adversarial
   kind: revision
   title: 已绑定审批的版本发生实质修改 → 审批失效，须报原签批人复审
   request: 起草一份向市政府申请基层医疗示范点建设经费的请示
@@ -91,6 +96,7 @@
     log_events: [approval.invalidated]
 
 - id: SR-06
+  task_group: adversarial
   kind: pipeline
   title: 无头模式即使授权自动接受，也不能越过人工送审
   request: 起草一份向市政府申请基层医疗示范点建设经费的请示
@@ -102,6 +108,7 @@
     pending_kinds: [人工送审]
 
 - id: SR-07
+  task_group: adversarial
   kind: model
   title: 模型擅自写入“经市政府研究同意” → 校验器拒绝
   model: approval_claim
@@ -114,6 +121,7 @@
     draft_not_contains: [经市政府研究同意]
 
 - id: SR-08
+  task_group: adversarial
   kind: model
   title: 模型拒答 → 显式记录并回退确定性路径，不把空结果当成功
   model: refuse
@@ -127,6 +135,7 @@
     log_events: [skill.model_skipped]
 
 - id: SR-09
+  task_group: single
   kind: check
   title: 相对时间表述
   text: |
@@ -139,6 +148,7 @@
     rules_present: [GW-STYLE-003]
 
 - id: SR-10
+  task_group: single
   kind: check
   title: 空泛表态堆砌
   text: |
@@ -152,6 +162,7 @@
     rules_present: [GW-STYLE-001]
 
 - id: SR-11
+  task_group: single
   kind: check
   title: 新增高频报送要求（减负）
   text: |
@@ -164,6 +175,7 @@
     rules_present: [GW-BURDEN-001]
 
 - id: SR-12
+  task_group: single
   kind: check
   control: true
   title: 对照：规范的通知（不应有重要以上问题）

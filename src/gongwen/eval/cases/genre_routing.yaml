@@ -1,5 +1,6 @@
 # 第一组：文种与行文（合成用例；机关名称均为“示例市/示例省”）
 - id: GR-01
+  task_group: single
   kind: pipeline
   title: 用户写“报告”，实质请求批准 → 请示
   request: 写一份向主管部门申请基层医疗示范点建设经费的报告
@@ -35,6 +36,7 @@
     alternatives_include: [报告]
 
 - id: GR-02
+  task_group: single
   kind: pipeline
   title: 直接要求起草请示
   request: 起草一份向市政府申请基层医疗示范点建设经费的请示
@@ -48,6 +50,7 @@
     numbers_sourced: true
 
 - id: GR-03
+  task_group: single
   kind: pipeline
   title: 汇报情况、不请求批准 → 报告，且不夹带请示事项
   request: 向市政府报告2025年基层医疗示范点建设工作情况
@@ -62,6 +65,7 @@
     draft_not_contains: [请批示, 请批复, 报告报告]
 
 - id: GR-04
+  task_group: single
   kind: pipeline
   title: 部署工作 → 通知（下行文），材料中的全部任务都写入
   request: 起草一份部署2026年基层医疗示范点建设工作的通知
@@ -83,6 +87,7 @@
     draft_contains: [2026年6月底前完成选址, 组织验收, 特此通知。]
 
 - id: GR-05
+  task_group: single
   kind: pipeline
   title: 向不相隶属的平级部门商请支持 → 函（平行文）
   request: 给示例市财政局发函，商请支持基层医疗示范点建设经费
@@ -96,6 +101,7 @@
     draft_not_contains: [给示例市财政局发函, 请遵照执行]
 
 - id: GR-06
+  task_group: temporal
   kind: pipeline
   title: 部门向同级部门“申请”经费 → 提示不相隶属应用函
   request: 向主管部门申请专项经费
@@ -108,6 +114,7 @@
     alternatives_include: [函]
 
 - id: GR-07
+  task_group: adversarial
   kind: pipeline
   title: 部门内设机构对外正式行文 → 超出权限
   request: 向示例市财政局申请专项经费
@@ -121,6 +128,7 @@
     checkpoint_text: [内设机构]
 
 - id: GR-08
+  task_group: single
   kind: check
   title: 报告中夹带请示事项
   text: |
@@ -137,6 +145,7 @@
     rules_present: [GW-GENRE-003]
 
 - id: GR-09
+  task_group: single
   kind: check
   title: 请示一文多事
   text: |
@@ -153,6 +162,7 @@
     rules_present: [GW-GENRE-002]
 
 - id: GR-10
+  task_group: single
   kind: check
   title: 函对不相隶属机关使用下行称谓与指令口吻
   text: |
@@ -166,6 +176,7 @@
     rules_present: [GW-GENRE-006, GW-GENRE-007]
 
 - id: GR-11
+  task_group: single
   kind: check
   title: 上行文结束语与行文方向错位
   text: |
@@ -180,6 +191,7 @@
     rules_present: [GW-GENRE-005]
 
 - id: GR-12
+  task_group: single
   kind: check
   title: 标题缺发文机关与文种、末尾加句号
   text: |
@@ -192,6 +204,7 @@
     rules_present: [GW-FMT-009]
 
 - id: GR-13
+  task_group: single
   kind: check
   control: true
   title: 对照：规范的请示（不应有重要以上问题）

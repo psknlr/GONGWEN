@@ -1,5 +1,6 @@
 # 第四组：格式与版式（GB/T 9704—2012、GB/T 15834—2011、GB/T 15835—2011）
 - id: FL-01
+  task_group: single
   kind: check
   title: 发文字号用方括号、加“第”、编虚位
   text: |
@@ -14,6 +15,7 @@
     rules_present: [GW-FMT-001]
 
 - id: FL-02
+  task_group: single
   kind: check
   title: 成文日期月日编虚位
   text: |
@@ -26,6 +28,7 @@
     rules_present: [GW-FMT-002]
 
 - id: FL-03
+  task_group: single
   kind: check
   title: 成文日期使用汉字数字（2012 国标要求阿拉伯数字）
   text: |
@@ -38,6 +41,7 @@
     rules_present: [GW-FMT-002]
 
 - id: FL-04
+  task_group: multi
   kind: check
   title: 附件说明名称后加标点
   text: |
@@ -52,6 +56,7 @@
     rules_present: [GW-FMT-003]
 
 - id: FL-05
+  task_group: multi
   kind: check
   title: 正文引用的附件在附件说明中不存在
   text: |
@@ -66,6 +71,7 @@
     rules_present: [GW-FMT-004]
 
 - id: FL-06
+  task_group: single
   kind: check
   title: 结构层次序数跳级
   text: |
@@ -82,6 +88,7 @@
     rules_present: [GW-STRUCT-001]
 
 - id: FL-07
+  task_group: single
   kind: check
   title: 同级序数不连续
   text: |
@@ -98,6 +105,7 @@
     rules_present: [GW-STRUCT-002]
 
 - id: FL-08
+  task_group: single
   kind: check
   title: 中文语境使用半角标点
   text: |
@@ -110,6 +118,7 @@
     rules_present: [GW-PUNC-001]
 
 - id: FL-09
+  task_group: single
   kind: check
   title: 年份简写
   text: |
@@ -122,6 +131,7 @@
     rules_present: [GW-NUM-001]
 
 - id: FL-10
+  task_group: single
   kind: check
   title: 百分数范围省略前一个百分号
   text: |
@@ -134,6 +144,7 @@
     rules_present: [GW-NUM-002]
 
 - id: FL-11
+  task_group: adversarial
   kind: check
   title: 文稿标注密级 → 涉密公文不在本系统处理范围
   text: |
@@ -147,6 +158,7 @@
     rules_present: [GW-SEC-003]
 
 - id: FL-12
+  task_group: single
   kind: check
   title: 省略号与连接号用法
   text: |
@@ -159,6 +171,7 @@
     rules_present: [GW-PUNC-005]
 
 - id: FL-13
+  task_group: single
   kind: check
   control: true
   title: 对照：格式规范的函（不应有重要以上问题）
@@ -174,6 +187,7 @@
     max_issues: {阻断送审: 0, 重要: 0}
 
 - id: FL-14
+  task_group: single
   kind: pipeline
   title: 生成的请示通过版式参数回读核验（不依赖渲染工具）
   request: 起草一份向市政府申请基层医疗示范点建设经费的请示
