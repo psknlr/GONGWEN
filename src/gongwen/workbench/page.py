@@ -92,7 +92,7 @@ function renderPending(){
   const pane = $('#p-pending'); let h = '';
   for(const cp of D.checkpoints){
     h += `<div class="card major"><h4>${esc(cp.kind)}：${esc(cp.question)}</h4>${(cp.details||[]).map(d=>`<div class="meta">· ${esc(d)}</div>`).join('')}`;
-    if(D.api){ h += `<textarea placeholder="说明（可选）" data-note="${esc(cp.cp_id)}"></textarea>` + cp.options.map(o=>`<button class="btn ${o.key==='accept'||o.key==='submit'?'primary':''}" data-cp="${esc(cp.cp_id)}" data-opt="${esc(o.key)}">${esc(o.label)}</button>`).join(''); }
+    if(D.api){ h += `<textarea placeholder="说明（可选）" data-note="${esc(cp.cp_id)}"></textarea><textarea placeholder='附加数据（JSON，可选，如 {"confirm_facts":["F-003"]}）' data-json="${esc(cp.cp_id)}"></textarea>` + cp.options.map(o=>`<button class="btn ${o.key==='accept'||o.key==='submit'?'primary':''}" title="${esc(o.effect||'')}" data-cp="${esc(cp.cp_id)}" data-opt="${esc(o.key)}">${esc(o.label)}</button>`).join(''); }
     else { h += '<div class="meta">请在命令行运行 <code>gongwen task confirm</code> 或启动 <code>gongwen serve</code> 处理。</div>'; }
     h += '</div>';
   }
@@ -100,8 +100,10 @@ function renderPending(){
   pane.innerHTML = h || '<div class="empty">没有待确认事项。</div>';
   $$('button[data-cp]', pane).forEach(b=>b.onclick=async()=>{
     const note = ($(`textarea[data-note="${b.dataset.cp}"]`)||{}).value||'';
+    let data = {}; const raw = ($(`textarea[data-json="${b.dataset.cp}"]`)||{}).value||'';
+    if(raw.trim()){ try{ data = JSON.parse(raw); }catch(e){ alert('附加数据不是有效 JSON'); return; } }
     b.disabled = true;
-    const r = await fetch(D.api+'/checkpoint', {method:'POST', headers:{'Content-Type':'application/json','X-GW-Token':D.token}, body: JSON.stringify({task_id:D.task_id, cp_id:b.dataset.cp, option:b.dataset.opt, note})});
+    const r = await fetch(D.api+'/checkpoint', {method:'POST', headers:{'Content-Type':'application/json','X-GW-Token':D.token}, body: JSON.stringify({task_id:D.task_id, cp_id:b.dataset.cp, option:b.dataset.opt, note, data})});
     const j = await r.json(); alert(j.message || (r.ok?'已处理':'处理失败')); if(r.ok) location.reload(); else b.disabled=false;
   });
 }

@@ -56,6 +56,16 @@ MEDIA_TYPES = {
 }
 
 
+SAFE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$")
+
+
+def safe_id(value: str, what: str = "标识") -> str:
+    """任务、事项、材料标识只允许字母数字与 _ . -，防止路径穿越（例如经本地审阅服务传入的 ID）。"""
+    if not isinstance(value, str) or not SAFE_ID_RE.match(value) or ".." in value:
+        raise KeyError(f"非法{what}：{value!r}")
+    return value
+
+
 def guess_media_type(filename: str) -> str:
     ext = Path(filename).suffix.lower()
     return MEDIA_TYPES.get(ext) or mimetypes.guess_type(filename)[0] or "application/octet-stream"
@@ -66,7 +76,7 @@ class MaterialStore:
         self.root = Path(root)
 
     def _mdir(self, matter_id: str) -> Path:
-        d = self.root / "matters" / matter_id / "materials"
+        d = self.root / "matters" / safe_id(matter_id, "事项标识") / "materials"
         d.mkdir(parents=True, exist_ok=True)
         return d
 
@@ -199,12 +209,15 @@ class TaskStore:
         self.root = Path(root)
 
     def task_dir(self, task_id: str) -> Path:
-        d = self.root / "tasks" / task_id
+        d = self.root / "tasks" / safe_id(task_id, "任务标识")
         d.mkdir(parents=True, exist_ok=True)
         return d
 
     def exists(self, task_id: str) -> bool:
-        return (self.root / "tasks" / task_id / "state.json").is_file()
+        try:
+            return (self.root / "tasks" / safe_id(task_id, "任务标识") / "state.json").is_file()
+        except KeyError:
+            return False
 
     def list_tasks(self) -> list[str]:
         base = self.root / "tasks"

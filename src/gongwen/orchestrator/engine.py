@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import json
 import traceback
 from copy import deepcopy
 from datetime import datetime, timezone
@@ -18,7 +19,7 @@ from typing import Any
 from ..harness.budget import BudgetExceeded
 from ..harness.permissions import Action, Principal, channel, human
 from ..harness.session import SessionLog
-from ..knowledge.stores import TaskStore
+from ..knowledge.stores import TaskStore, safe_id
 from ..llm.base import ModelRefused
 from ..parsing import parse_bytes
 from ..parsing.admission import ScanInput, aggregation_risk, scan
@@ -72,9 +73,9 @@ class Engine:
         return self.rt.tasks
 
     def load_state(self, task_id: str) -> TaskState:
-        p = self.store.task_dir(task_id) / "state.json"
-        if not p.is_file():
+        if not self.store.exists(task_id):
             raise KeyError(f"任务不存在：{task_id}")
+        p = self.store.task_dir(task_id) / "state.json"
         return TaskState.model_validate_json(p.read_text(encoding="utf-8"))
 
     def save_state(self, st: TaskState) -> None:
@@ -99,6 +100,8 @@ class Engine:
         self._require(by, Action.TASK_WRITE)
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S%f")[:-3]
         task_id = f"T{stamp}"
+        if matter_id:
+            safe_id(matter_id, "事项标识")
         st = TaskState(task_id=task_id, matter_id=matter_id or f"M{stamp}", created_by=by.id, options={"request": request, "hints": hints or {}, **(options or {})})
         st.history.append(StageRecord(stage=Stage.ADMISSION))
         self.save_state(st)
@@ -498,6 +501,10 @@ class Engine:
         return None
 
     def package(self, st: TaskState, log: SessionLog) -> ReviewPackage:
+        return self.package_with_data(st, log)[0]
+
+    def package_with_data(self, st: TaskState, log: SessionLog) -> tuple[ReviewPackage, dict[str, Any]]:
+        """生成送审包，同时返回审阅工作台所需的数据（供本地审阅服务渲染交互页面）。"""
         sc = self.sc(st, log)
         ir = self.current_ir(st)
         patchsets = []
@@ -506,7 +513,7 @@ class Engine:
                 ps = sc.load(k, PatchSet)
                 if ps:
                     patchsets.append(ps)
-        pkg, _ = self.rt.skills.get("gongwen-review-package").run(
+        pkg, data = self.rt.skills.get("gongwen-review-package").run(
             sc,
             ir,
             sc.load("review_report", ReviewReport),
@@ -522,7 +529,38 @@ class Engine:
         st.doc_status = pkg.status
         self.store.save_version(st.task_id, ir.doc_id, ir.version, ir)
         sc.save("review_package", pkg)
-        return pkg
+        self.store.write_json(st.task_id, "workbench_data.json", data)
+        return pkg, data
+
+    def workbench_page(self, task_id: str, *, api: str = "", token: str = "") -> str | None:
+        """当前文稿的审阅工作台页面；尚未形成文稿时返回 None。
+
+        优先复用最近一次送审打包生成的数据（与当前版本一致时），只刷新待确认事项，
+        避免每次浏览都重新打包、重复写审计日志。
+        """
+        st = self.load_state(task_id)
+        ir = self.current_ir(st)
+        if ir is None:
+            return None
+        from ..workbench import build_page
+
+        cache = self.store.task_dir(task_id) / "workbench_data.json"
+        data = None
+        if cache.exists():
+            data = json.loads(cache.read_text(encoding="utf-8"))
+            if data.get("version") != ir.version:
+                data = None
+        if data is None:
+            if not self.store.has(task_id, "review_report"):
+                return None
+            _, data = self.package_with_data(st, self.log(task_id))
+            self.save_state(st)
+            ir = self.current_ir(st)
+        data["checkpoints"] = [
+            {"cp_id": c.cp_id, "kind": c.kind.value, "question": c.question, "details": c.details, "options": [o.model_dump() for o in c.options]}
+            for c in st.pending_checkpoints()
+        ]
+        return build_page(ir, data, api=api, token=token)
 
     # ================================================================ 人工审核节点
     def resolve_checkpoint(self, task_id: str, cp_id: str, option: str, *, by: Principal, note: str = "", data: dict[str, Any] | None = None) -> TaskState:
@@ -842,7 +880,7 @@ class Engine:
 
     # ================================================================ 事项级事实账本
     def _matter_dir(self, st: TaskState) -> Path:
-        d = Path(self.rt.config.environment.data_dir) / "matters" / st.matter_id
+        d = Path(self.rt.config.environment.data_dir) / "matters" / safe_id(st.matter_id, "事项标识")
         d.mkdir(parents=True, exist_ok=True)
         return d
 
