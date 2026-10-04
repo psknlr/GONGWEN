@@ -68,6 +68,15 @@ def planned_form(text: str) -> str:
     return t
 
 
+# 不设层次标题的章节在待补占位中的名称
+ROLE_LABELS = {"matter": "主要事项", "content": "主要内容", "reason": "提请审议事由", "articles": "条文", "appoint": "任免事项", "answer": "答复意见", "items": "工作事项"}
+MATTER_LABELS = {"函": "函商事项", "公告": "公告事项", "命令（令）": "令文事项"}
+
+
+def role_label(role: str, doc_kind: str) -> str:
+    return (MATTER_LABELS.get(doc_kind) if role == "matter" else None) or ROLE_LABELS.get(role, "正文")
+
+
 NO_OPENING = ("决议", "命令（令）", "公报", "议案", "简报", "工作要点", "管理办法")
 NO_RECIPIENTS = ("纪要", "公告", "通告", "公报", "决议", "命令（令）", "工作方案", "讲话稿", "汇报材料", "工作总结", "调研报告", "简报", "工作要点", "管理办法")
 # 发文机关为人民政府时，签署令、议案的负责人职务
@@ -329,6 +338,8 @@ class Drafter:
         is_letter = self.doc_kind in ("函", "批复", "通报", "决定", "通告", "公告", "决议", "命令（令）", "公报", "议案", "简报", "管理办法") or self.outline.variant in ("任免", "转发")  # 篇幅短的文种一般不设层次标题
         for sec in self.outline.sections:
             content: list[Block] = []
+            if self.doc_kind == "意见":
+                self.item_no = 0  # 意见各部分内的措施分别以（一）（二）编号
             for p in sec.paragraphs:
                 if self.doc_kind == "命令（令）" and sec.role == "matter":
                     content.append(self.order_paragraph(self.facts_of(p)))
@@ -338,7 +349,8 @@ class Drafter:
                     sents = [self.sent(norm_sentence(re.sub(r"^[^：:]{2,6}[：:]\s*", "", f.statement)), [EvidenceRef(kind="fact", id=f.fact_id)], p.function) for f in self.facts_of(p)]
                 else:
                     sents = self.fact_sentences(self.facts_of(p), p.function)
-                if self.doc_kind in ("管理办法", "工作要点") and p.measure_ids:
+                itemized = self.doc_kind in ("管理办法", "工作要点") or (self.doc_kind == "意见" and len(p.measure_ids) >= 2)
+                if itemized and p.measure_ids:
                     # 办法按条、要点按项分段，内容照材料原句，不增删
                     for mid in p.measure_ids:
                         m = self.outline.measure(mid)
@@ -350,7 +362,7 @@ class Drafter:
                             content.append(self.para([ms], p.para_id))
                     if not sents:
                         continue
-                for mid in ([] if self.doc_kind in ("管理办法", "工作要点") else p.measure_ids):
+                for mid in ([] if itemized else p.measure_ids):
                     m = self.outline.measure(mid)
                     if m:
                         sents.append(self.measure_sentence(m))
@@ -396,7 +408,7 @@ class Drafter:
                     elif gi_ and any(c["key"] == sec.role and not c.get("required", True) for c in gi_.contract):
                         continue  # 契约中的可选部分：没有材料就不写
                     else:
-                        sents = [self.sent(self.placeholder(sec.role, f"{sec.heading or sec.role}相关内容"), [], p.function)]
+                        sents = [self.sent(self.placeholder(sec.role, f"{sec.heading or role_label(sec.role, self.doc_kind)}相关内容"), [], p.function)]
                 content.append(self.para(sents, p.para_id))
             if not content:
                 continue

@@ -976,3 +976,43 @@
     draft_contains: [关于印发《示例市基层医疗机构管理办法》的通知, 现将《示例市基层医疗机构管理办法》印发给你们]
     attachment_text_contains: [第一条　基层医疗机构应当按规定开展家庭医生签约服务, 第二条　各区卫生健康局负责]
     draft_not_contains: [管理办法管理办法]
+
+- id: GR-50
+  task_group: single
+  kind: pipeline
+  title: 公告：宣布法定事项，开头“现将有关事项公告如下”，名单照材料，无主送机关
+  request: 起草一份关于公布第二批市级基层医疗示范点名单的公告
+  hints: {issuer_type: 政府部门}
+  materials:
+    - name: 评审结果.md
+      text: |
+        经专家评审和社会公示，甲区社区卫生服务中心、乙区社区卫生服务中心、丙区中心卫生院确定为第二批市级基层医疗示范点。
+
+        示范点命名有效期为3年，期满复核。
+  accept: [task_confirm, outline_confirm]
+  expect:
+    stage: 人工送审
+    genre: 公告
+    draft_contains: [丙区中心卫生院, 有效期为3年, 特此公告]
+    draft_not_contains: [【待补：主送机关, matter]
+
+- id: GR-51
+  task_group: single
+  kind: pipeline
+  title: 下行意见（指导意见）：标题不写成“指导的意见”，措施照材料分条编号，结束语按下行“请结合实际认真贯彻执行”
+  request: 起草一份关于加强基层医疗人才队伍建设的指导意见，发各区卫生健康局
+  hints: {recipients: 各区卫生健康局, issuer_type: 政府部门}
+  materials:
+    - name: 措施.md
+      text: |
+        截至2025年底，全市基层医疗卫生机构人员缺口约1200人。
+
+        各区要实施基层医疗人才定向培养计划，每年定向招收医学生不少于30名。
+
+        各区要建立城市医生下基层轮岗制度，二级以上医院医生晋升前须到基层服务满6个月。
+  accept: [task_confirm, outline_confirm]
+  expect:
+    stage: 人工送审
+    genre: 意见
+    draft_contains: [关于加强基层医疗人才队伍建设的指导意见, 现就加强基层医疗人才队伍建设提出如下意见, （一）各区要实施, （二）各区要建立, 以上意见，请结合实际认真贯彻执行]
+    draft_not_contains: [如无不妥, 指导意见的意见]

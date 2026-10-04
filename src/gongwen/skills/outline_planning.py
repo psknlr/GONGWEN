@@ -81,7 +81,10 @@ APPOINT_RE = re.compile(r"任命|免去|聘任|聘为|任职|免职|兼任|试�
 
 
 def notice_variant(request: str, doc_kind: str) -> str:
-    """通知的常见变体：转发（批转）、会议、任免；其他文种返回空。"""
+    """文种的常见变体：通知的转发（批转）、会议、任免；意见的指导、实施、若干意见。其他返回空。"""
+    if doc_kind == "意见":
+        m = re.search(r"(指导|实施|若干)意见", request)
+        return m.group(1) if m else ""
     if doc_kind != "通知":
         return ""
     if re.search(r"转发|批转", request):
@@ -401,6 +404,9 @@ class OutlinePlanningSkill(Skill):
             core = f"关于印发《{name}》的通知"
         elif genre.material_type:
             return subject if re.search(r"(方案|计划|要点|办法|细则|总结|材料|报告)$", subject) else f"{subject}{genre.material_type}"
+        elif genre.suggested_genre == "意见" and variant:
+            # 指导意见、实施意见、若干意见：变体名称属于文种名称，不写进事由
+            core = f"关于{re.sub(r'(的)?' + variant + '$', '', subject)}的{variant}意见"
         else:
             core = f"关于{subject}的{genre.suggested_genre or ''}"
         return f"{issuer}{core}" if issuer else core
