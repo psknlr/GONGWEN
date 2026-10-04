@@ -293,3 +293,33 @@
   expect:
     genre: 通知
     rules_present: [GW-GENRE-003, GW-GENRE-005, GW-GENRE-006, GW-PUNC-001, GW-STYLE-004, GW-STRUCT-001, GW-NUM-006, GW-NUM-007, GW-BURDEN-001, GW-FMT-004]
+
+
+- id: FL-19
+  task_group: adversarial
+  kind: check
+  title: “请示报告”混用文种、以报告申请经费、主送领导个人
+  text: |
+    示例市卫生健康委员会关于申请示范点建设经费的请示报告
+    张市长：
+    为提升基层医疗卫生服务能力，我委拟新建示范点12个，所需经费120万元。
+    特此报告。
+    示例市卫生健康委员会
+    2026年3月1日
+  expect:
+    rules_present: [GW-GENRE-001, GW-GENRE-003, GW-ROUTE-004]
+
+- id: FL-20
+  task_group: adversarial
+  kind: check
+  title: 函使用指令口吻、“你局”和通知的结束语
+  text: |
+    示例市卫生健康委员会关于商请协助开展示范点建设的函
+    示例市财政局：
+    为推进基层医疗示范点建设，请你局务必于2026年4月30日前拨付建设经费，请遵照执行。
+    特此通知。
+    示例市卫生健康委员会
+    2026年3月1日
+  expect:
+    genre: 函
+    rules_present: [GW-GENRE-004, GW-GENRE-006, GW-GENRE-007]

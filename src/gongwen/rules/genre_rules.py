@@ -26,6 +26,14 @@ MATTER_CATEGORIES = {
 }
 
 
+# 各文种专用的结束语：出现在其他文种中即为错用
+CLOSING_OWNER = {
+    "特此通知": "通知", "特此报告": "报告", "特此通报": "通报", "此复": "批复", "特此批复": "批复",
+    "特此函告": "函", "特此函复": "函", "特此函达": "函", "专此函复": "函", "特此公告": "公告", "特此通告": "通告",
+}
+LEADER_TITLE = re.compile(r"(书记|省长|市长|县长|区长|乡长|镇长|主任|局长|厅长|部长|院长|校长|处长|所长|同志)$")
+
+
 def _last_sentences(ctx: CheckContext, n: int = 2):
     sents = list(ctx.ir.iter_sentences(include_attachments=False))
     return sents[-n:]
@@ -43,6 +51,8 @@ def check_title(ctx: CheckContext) -> list[ReviewIssue]:
     if any(w in title for w in ("紧急", "特急", "加急")):
         out.append(ctx.issue("GW-GENRE-009", IssueType.FORMAT, "紧急程度应作为版头要素标注，不写入标题", field_name="title", original=title))
     g = kb.genre(ir.genre)
+    if re.search(r"(请示报告|报告请示)$", bare):
+        out.append(ctx.issue("GW-GENRE-001", IssueType.GENRE_MISMATCH, "“请示报告”不是法定文种：请求批准或指示用请示，汇报工作、反映情况用报告，二者不得混用", field_name="title", original=title, needs_human=True))
     if g and g.statutory:
         genre_tail = ir.genre.replace("（令）", "")
         if not (bare.endswith(ir.genre) or bare.endswith(genre_tail) or (ir.genre == "命令（令）" and bare.endswith("令"))):
@@ -108,6 +118,18 @@ def check_closing_and_direction(ctx: CheckContext) -> list[ReviewIssue]:
                             needs_human=True,
                         )
                     )
+    # “申请……的报告”：以报告请求批准
+    if genre == "报告" and re.search(r"申请|请求|核拨|拨付|追加", ir.title) and not any(i.type == IssueType.MIXED_REQUEST for i in out):
+        b, s = sentences[0]
+        out.append(ctx.issue("GW-GENRE-003", IssueType.MIXED_REQUEST, "标题为申请、请求事项，却使用“报告”：请求批准的事项应当用请示，报告中不得夹带请示事项", field_name="title", original=ir.title, needs_human=True))
+    # 其他文种的专用结束语（请示另行检查）
+    if genre and genre != "请示":
+        for b, s in sentences:
+            t = s.text.strip()
+            hit = next((p for p, owner in CLOSING_OWNER.items() if owner != genre and (t == p + "。" or t.endswith("，" + p + "。") or t == p)), None)
+            if hit:
+                good = (kb.genre(genre).closing_candidates(direction, include_acceptable=False) or [""])[0] if kb.genre(genre) else ""
+                out.append(ctx.issue("GW-GENRE-004", IssueType.CLOSING_MISMATCH, f"“{hit}”是{CLOSING_OWNER[hit]}的结束语，{genre}不应使用" + (f"（可用“{good}”）" if good else ""), block=b, sentence=s))
     # 请示：结尾须有明确请求
     if genre == "请示":
         tail = "".join(s.text for _, s in _last_sentences(ctx, 3))
@@ -229,6 +251,9 @@ def _looks_lower(organ: str, issuer: str) -> bool:
 def check_routing(ctx: CheckContext) -> list[ReviewIssue]:
     out: list[ReviewIssue] = []
     ir = ctx.ir
+    leaders = [r for r in ir.recipients if LEADER_TITLE.search(r.strip())]
+    if leaders and ctx.direction in ("上行文", "", "待核实") and not (ctx.genre and any(f.code == "TO_LEADER" for f in ctx.genre.authority_findings)):
+        out.append(ctx.issue("GW-ROUTE-004", IssueType.ROUTING, f"主送“{'、'.join(leaders)}”为机关负责人：除上级机关负责人直接交办事项外，不得以本机关名义向上级机关负责人报送公文，应主送上级机关", field_name="recipients", original="、".join(ir.recipients), needs_human=True))
     if ctx.direction == "上行文":
         if len(ir.recipients) > 1:
             out.append(
