@@ -39,12 +39,19 @@ def check_citations(ctx: CheckContext) -> list[ReviewIssue]:
     if ctx.task and ctx.task.region.known:
         region = str(ctx.task.region.value)
     subject_types = ctx.profile.get("subject_types") if ctx.profile else None
+    # 本文附件的标题（“现将《××方案》印发给你们”）不是行文依据，不在依据库中核验
+    own_titles = {a.title.strip() for a in ctx.ir.attachments if a.title} | {n.name.strip() for n in ctx.ir.attachment_notes if n.name}
     for b, s in ctx.ir.iter_sentences():
         if _CITE_ORDER_BAD.search(s.text):
             out.append(ctx.issue("GW-BASIS-004", IssueType.CITATION_FORMAT, "引用公文应先引标题、后引发文字号，如《××关于××的通知》（××〔2026〕5号）", block=b, sentence=s))
         policy_refs = [r for r in s.refs if r.kind == "policy"]
-        titles = find_titles(s.text)
+        titles = [t for t in find_titles(s.text) if t not in own_titles]
         numbers = find_doc_numbers(s.text)
+        # 批复、复函引用的来文（“你委《××的请示》（××〔2026〕5号）收悉”）以材料为证，不是政策依据
+        incoming = [ctx.sources.text_of(r.id) for r in s.refs if r.kind == "material" and r.note == "来文"] if ctx.sources else []
+        if incoming:
+            titles = [t for t in titles if not any(t in txt for txt in incoming)]
+            numbers = [n for n in numbers if not any(n in txt for txt in incoming)]
         if lib is None:
             continue
         cited = []

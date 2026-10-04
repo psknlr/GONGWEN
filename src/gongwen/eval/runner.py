@@ -397,6 +397,20 @@ def _material_text(case: dict[str, Any]) -> str:
     return "\n\n".join(parts)
 
 
+def _text_rows(text: str) -> list[list[str]]:
+    """CSV 行或 Markdown 表格行（跳过 |---| 分隔行）。"""
+    rows = []
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith("|"):
+            cells = [c.strip() for c in line.strip("|").split("|")]
+            if not all(set(c) <= set("-: ") for c in cells):
+                rows.append(cells)
+        elif "," in line:
+            rows.append(line.split(","))
+    return rows
+
+
 def _fabricated_numbers(case: dict[str, Any], text: str) -> list[str]:
     """输出中出现、而需求与材料中没有的数字（含由材料合计复算得到的数也视为有来源）。"""
     from ..rules.textutil import extract_numbers
@@ -407,7 +421,7 @@ def _fabricated_numbers(case: dict[str, Any], text: str) -> list[str]:
     changes = {fc["attribute"]: fc["new_value"] for fc in (case.get("revise") or {}).get("fact_changes", [])}
     known |= {float(v) for v in changes.values() if isinstance(v, (int, float))}  # 人工给出的更正值
     for m in case.get("materials") or []:  # 表格列合计：系统会复算（含人工更正后的复算），复算值不算虚构
-        rows = [list(r) for r in (m.get("rows") or [r.split(",") for r in str(m.get("text", "")).splitlines() if "," in r])]
+        rows = [list(r) for r in (m.get("rows") or _text_rows(str(m.get("text", ""))))]
         for r in rows[1:]:
             for attr, v in changes.items():
                 if r and str(r[0]).startswith(attr) and len(r) > 1:

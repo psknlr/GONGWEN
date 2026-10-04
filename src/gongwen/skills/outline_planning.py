@@ -22,6 +22,7 @@ from ..schemas.state import Stage
 from ..schemas.task import TaskSpec
 from .base import Skill, SkillContext
 from .policy_retrieval import is_substantive
+from .references import find_incoming
 
 MEASURE_VERBS = ("建立", "开展", "推进", "实施", "落实", "组织", "完善", "建设", "采购", "购置", "设立", "制定", "制订", "培训", "改造", "新建", "扩建", "配备", "整治", "检查", "评估", "试点", "推广", "召开", "报送", "上报", "申请")
 DEADLINE_RE = re.compile(r"(\d{4}年\d{1,2}月(?:\d{1,2}日)?(?:前|底前|以前|之前)?|\d{1,2}月(?:\d{1,2}日)?(?:前|底前)|年底前|年内|月底前|季度末前)")
@@ -41,6 +42,7 @@ GENRE_SECTIONS: dict[str, list[tuple[str, str, str]]] = {
     "通知": [("items", "主要任务", "措施"), ("requirements", "工作要求", "要求")],
     "函": [("matter", "", "请求")],
     "纪要": [("decisions", "会议议定事项", "措施"), ("pending", "待研究事项", "事实")],
+    "批复": [("answer", "", "措施"), ("requirements", "", "要求")],
     "工作方案": [("goal", "工作目标", "措施"), ("scope", "工作范围", "事实"), ("tasks", "主要任务", "措施"), ("division", "职责分工", "措施"), ("schedule", "进度安排", "措施"), ("resources", "保障措施", "措施"), ("evaluation", "评价方式", "要求")],
     "汇报材料": [("overview", "基本情况", "事实"), ("work", "主要工作和成效", "事实"), ("problems", "存在问题", "分析"), ("next", "下一步打算", "措施")],
     "工作总结": [("work", "主要工作", "事实"), ("results", "取得的成效", "事实"), ("problems", "问题与不足", "分析"), ("next", "下一步打算", "措施")],
@@ -94,7 +96,7 @@ class OutlinePlanningSkill(Skill):
         gi = kb.genre(doc_kind)
         subject = str(spec.subject.value or "有关事项")
         issuer = spec.issuer.value.get("name") if spec.issuer.known and isinstance(spec.issuer.value, dict) else ""
-        plan = OutlinePlan(genre=genre.suggested_genre, material_type=genre.material_type, title=self._title(issuer, subject, genre))
+        plan = OutlinePlan(genre=genre.suggested_genre, material_type=genre.material_type, title=self._title(issuer, subject, genre, find_incoming(bundle)))
         plan.total_budget_chars = BUDGETS.get(doc_kind, 1500)
         usable = [f for f in ledger.facts if "example" not in f.tags and f.status not in (FactStatus.CONFLICT, FactStatus.UNKNOWN)]
         planned = [f for f in usable if f.status == FactStatus.PROPOSED]
@@ -131,6 +133,9 @@ class OutlinePlanningSkill(Skill):
         sections = GENRE_SECTIONS.get(doc_kind) or [(c["key"], c["name"], (c.get("functions") or ["事实"])[0]) for c in (gi.contract if gi else [])]
         meeting_decided = [f for f in usable if "meeting:decided" in f.tags]
         meeting_discussed = [f for f in usable if "meeting:discussion" in f.tags]
+        incoming = find_incoming(bundle)
+        # 已作为措施来源或已被前面章节使用的事实，不在“要求”“保障”等章节重复陈述
+        used: set[str] = set(measure_sources)
         for role, heading, function in sections:
             sec = SectionPlan(section_id=sc.ids.next("S"), heading=heading, role=role)
             pick: list[Fact] = []
@@ -150,6 +155,11 @@ class OutlinePlanningSkill(Skill):
                     plan.open_questions.append("请示涉及资源，但未提供测算明细和资金来源。请补充（系统不会自行补写金额）。")
             elif role == "reasons":
                 pick = problems[:3]
+            elif role == "answer":
+                # 答复意见：只用会议议定事项与审批类材料，不用来文自身的陈述
+                pick = [f for f in usable if "meeting:decided" in f.tags or "approval_candidate" in f.tags]
+                if not pick:
+                    plan.open_questions.append("材料中没有可作为答复依据的决定（会议议定或审批意见）。批复的答复意见须来自真实决定，请补充材料或人工填写。")
             elif role == "decisions":
                 pick = meeting_decided
                 if not pick:
@@ -157,10 +167,15 @@ class OutlinePlanningSkill(Skill):
             elif role == "pending":
                 pick = meeting_discussed
             elif role in ("requirements", "evaluation"):
-                pick = [f for f in usable if DATE_RE.search(f.statement) or "报送" in f.statement or "联系人" in f.statement][:4]
+                pick = [f for f in usable if f.fact_id not in used and (DATE_RE.search(f.statement) or "报送" in f.statement or "联系人" in f.statement)]
+                if doc_kind == "批复":
+                    # 批复的执行要求只能来自决定类材料，不能把来文自身的陈述当作要求
+                    pick = [f for f in pick if not (incoming and any(s.material_id == incoming.material_id for s in f.sources))]
+                pick = pick[:4]
             if role == "matter":
                 # 函：必要背景 + 商洽事项；涉及经费时写明测算合计（明细见附件）
                 pick = (done_or_ongoing + planned)[:6] + [f for f in computed if f.kind == "money"][:1]
+            used.update(f.fact_id for f in pick)
             core_parts = list(dict.fromkeys(f.statement for f in pick))[:2] + [m.text for m in plan.measures if m.measure_id in measure_ids][:2]
             para = ParagraphPlan(
                 para_id=sc.ids.next("PP"),
@@ -225,8 +240,12 @@ class OutlinePlanningSkill(Skill):
         return out
 
     @staticmethod
-    def _title(issuer: str, subject: str, genre: GenreDecision) -> str:
+    def _title(issuer: str, subject: str, genre: GenreDecision, incoming=None) -> str:
         subject = subject.strip()
+        if genre.suggested_genre == "批复" and incoming is not None:
+            core = re.sub(r"^.*?关于", "", incoming.title)
+            core = re.sub(r"的(请示|报告|函|意见)$", "", core)
+            return f"{issuer}关于{core}的批复" if issuer else f"关于{core}的批复"
         if genre.suggested_genre == "纪要":
             meeting = re.sub(r"(的)?(会议)?(纪要)?$", "", subject).strip("的") or "【待补：会议名称】"
             return f"{meeting}{'会议' if not meeting.endswith(('会', '会议')) else ''}纪要"

@@ -29,6 +29,7 @@ from ..schemas.state import Stage
 from ..schemas.task import TaskSpec
 from .base import Skill, SkillContext
 from .policy_retrieval import is_substantive
+from .references import addressee, find_incoming, short_name
 
 CN = "一二三四五六七八九十"
 SELF_REF = [("委员会", "委"), ("委", "委"), ("医院", "院"), ("研究院", "院"), ("学院", "院"), ("大学", "校"), ("学校", "校"), ("研究所", "所"), ("局", "局"), ("厅", "厅"), ("办公室", "办"), ("中心", "中心"), ("公司", "公司"), ("人民政府", "市")]
@@ -36,6 +37,8 @@ _LIST_PREFIX = re.compile(r"^\s*(?:[一二三四五六七八九十]+、|（[一�
 
 
 def self_reference(issuer: str, profile: dict) -> str:
+    if issuer.endswith("人民政府"):
+        return f"我{short_name(issuer)}"
     for suffix, ch in SELF_REF:
         if issuer.endswith(suffix):
             return f"我{ch}"
@@ -199,7 +202,15 @@ class Drafter:
             text = info.rstrip("。") + "。现将会议议定事项纪要如下。"
             return self.para([self.sent(text, [EvidenceRef(kind="fact", id=meet[0].fact_id)] if meet else [], "事实")])
         elif k == "批复":
-            text = f"你{self.self_ref[1:] if self.self_ref.startswith('我') else '单位'}" + self.placeholder("reply_ref", "来文标题和发文字号") + "收悉。经研究，现批复如下。"
+            inc = find_incoming(self.bundle)
+            to = self.spec.recipients.value[0] if self.spec.recipients.known and self.spec.recipients.value else None
+            addr = addressee(to.get("name", "") if isinstance(to, dict) else str(to or ""), "下行文") if to else "你单位"
+            if inc:
+                ref = f"《{inc.title}》" + (f"（{inc.doc_number}）" if inc.doc_number else self.placeholder("reply_no", "来文发文字号"))
+                crefs = crefs + [EvidenceRef(kind="material", id=inc.material_id, note="来文")]
+            else:
+                ref = self.placeholder("reply_ref", "来文标题和发文字号")
+            text = f"{addr}{ref}收悉。经研究，现批复如下。"
         elif self.genre.material_type and self.genre.suggested_genre == "通知":
             text = f"现将《{subject}{'' if subject.endswith(self.genre.material_type) else self.genre.material_type}》印发给你们，请结合实际认真组织实施。"
         elif k in ("工作方案", "汇报材料", "工作总结", "调研报告", "讲话稿"):
@@ -217,7 +228,7 @@ class Drafter:
     def body(self) -> list[Block]:
         blocks: list[Block] = []
         n = 0
-        is_letter = self.doc_kind == "函"
+        is_letter = self.doc_kind in ("函", "批复")  # 函、批复篇幅短，一般不设层次标题
         for sec in self.outline.sections:
             content: list[Block] = []
             for p in sec.paragraphs:
@@ -231,7 +242,12 @@ class Drafter:
                 if not sents:
                     gi_ = kb.genre(self.doc_kind)
                     required = {c["key"] for c in (gi_.contract if gi_ else []) if c.get("required")}
-                    if sec.role in ("requirements",):
+                    if sec.role == "answer":
+                        # 批复的答复意见只能来自真实决定（会议议定、审批意见），系统不代为决定是否同意
+                        sents = [self.sent(self.placeholder("answer", "答复意见（须依据真实审批决定，系统不代为决定是否同意）"), [], "措施")]
+                    elif sec.role in ("requirements",) and self.doc_kind == "批复":
+                        continue
+                    elif sec.role in ("requirements",):
                         sents = [self.sent(self.placeholder("requirements", "执行要求（如完成时限、报送方式、联系人）") , [], "要求")]
                     elif sec.role in required and sec.role in ("division", "schedule", "scope", "goal"):
                         # 内容契约要求的部分：以待补占位提示缺失，不擅自补写责任、进度与指标
