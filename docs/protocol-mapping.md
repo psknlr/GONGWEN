@@ -52,6 +52,7 @@
 | 2 原始材料不变、结构化副本带定位；保留正文—附件—表注关系 | `MaterialStore`（内容哈希只读）；`parsing/*`（段落、单元格、页行定位，表注关系） | `test_parsing_admission.py` |
 | 3 文种、权限与专门程序（合法性审核、公平竞争审查）；输出“需要哪些真实程序” | `genre_authority._authority/_procedures`；`ProcedureRequirement.status` 不生成“已通过” | GR-06、GR-07；`test_rules.py` |
 | 3 续：答复类文种（批复）引用来文、按受文机关定称谓，答复意见只来自真实决定 | `skills/references.py`（来文标题与文号识别、“你委/贵局”）；批复的“答复意见”只取会议议定或审批材料，缺失时留待补，不代为同意 | GR-18、GR-19 |
+| 3 续：全部 15 个法定文种、常见变体与事务文书；只能由特定机关使用的文种（命令、议案）与会议文书（决议） | `outline_planning.GENRE_SECTIONS/VARIANT_SECTIONS/notice_variant`；`genre_rules.may_issue_order/check_issuer_genre`（GW-GENRE-013～015）；逐文种说明见 [`genres.md`](genres.md) | GR-32～GR-59、FL-21～FL-24 |
 | 4 精确检索 + 语义检索 + 适用范围 + 版本 + 条款；检索限制条件；三个问题分别检查 | `PolicyLibrary.exact/search/constraints/applicability`；`GW-BASIS-001/002/003/005` | FB-09～11、FB-13；消融 no_temporal_check |
 | 5 事实账本六种状态；程序复算；口径与时点 | `FactLedger`、`CalcCheck`、`GW-FACT-001～006` | FB-01～04；消融 no_fact_ledger |
 | 6 提纲与措施表；候选方案仅在材料含多种规模时提出 | `OutlinePlan`、`AlternativePlan`；提纲确认节点 | GR-15 |

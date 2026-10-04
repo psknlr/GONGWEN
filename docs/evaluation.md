@@ -5,7 +5,7 @@
 ## 一、运行
 
 ```bash
-gongwen eval                                   # 完整系统，87 个回归用例（任一未通过时退出码 1，CI 以此为门槛）
+gongwen eval                                   # 完整系统，134 个回归用例（任一未通过时退出码 1，CI 以此为门槛）
 gongwen eval --ablate all --baselines          # 逐项消融 + minimal 基线
 gongwen eval --direct                          # 加“模型直接写作”基线（须在配置中设置模型）
 gongwen eval --export-review                   # 导出隐藏系统名称的盲评稿与评分表
@@ -25,14 +25,14 @@ gongwen eval --cases my_cases/ --out report/   # 自定义用例目录与输出�
 
 | 类型 | 做什么 | 期望示例 |
 |---|---|---|
-| `pipeline` | 走完整流程，模拟人在各审核节点的处理（`accept` 自动接受、`human` 脚本） | `stage`、`genre`、`draft_contains`、`draft_not_contains`、`section_contains`、`numbers_sourced`、`authority_codes`、`conflicts` |
+| `pipeline` | 走完整流程，模拟人在各审核节点的处理（`accept` 自动接受、`human` 脚本） | `stage`、`genre`、`draft_contains`、`draft_not_contains`、`section_contains`、`numbers_sourced`、`authority_codes`、`procedures`、`signature_organs`、`conflicts` |
 | `check` | 对外部文稿做规范检查 | `rules_present`（埋入的问题须检出）、`max_issues`（干净对照不得误报） |
 | `admission` | 材料准入 | `admission`（逐份判定）、`finding_codes` |
 | `revision` | 形成文稿后人工改写或变更关键事实 | `rules_present`、`errors_contain`、`attachment_table_contains` |
 | `model` | 用脚本化模型模拟虚构、越权、拒答 | `draft_not_contains`、`log_events` |
 | `matter` | 同一事项多份文稿（如请示 + 函）共享事实账本；一份文稿变更关键事实后核对其他文稿 | `expect_task`、`draft_contains`、`errors_contain` |
 
-当前 87 例的任务组构成：高频单文稿 37、多材料和跨文件 17、时间与政策适用 10、不完整、冲突与对抗 23。干净对照 5 例（FL-13、GR-13、SR-12 计入“对照误报”指标；FB-15、SR-21 核对特定规则不误报）。
+当前 134 例的任务组构成：高频单文稿 68、多材料和跨文件 21、时间与政策适用 10、不完整、冲突与对抗 35；按风险维度：文种与行文 59、事实与依据 30、语义与修订 21、格式与版式 24。全部 15 个法定文种、通知与函等常见变体和 8 类事务文书都有用例（逐文种对照见 [`genres.md`](genres.md)）。干净对照 6 例（FL-13、FL-23、GR-13、SR-12 计入“对照误报”指标；FB-15、SR-21 核对特定规则不误报）。
 
 ## 三、指标与设计 §9.4 的对应
 
@@ -52,25 +52,25 @@ gongwen eval --cases my_cases/ --out report/   # 自定义用例目录与输出�
 
 | 变体 | 通过 | 问题检出率 | 对照误报（重要以上） | 无来源数字句占比 | 虚构数字 | 人工送审被自动通过 |
 |---|---|---|---|---|---|---|
-| full | 87/87 | 1.0 | 0 | 0.0 | 0 | 0 |
-| no_fact_ledger | 83/87 | 1.0 | 0 | 0.0 | 0 | 0 |
-| no_temporal_check | 82/87 | 0.84 | 0 | 0.0 | 0 | 0 |
-| no_independent_review | 82/87 | 1.0 | 0 | 0.0 | 0 | 0 |
-| no_targeted_revision | 86/87 | 1.0 | 0 | 0.0 | 0 | 0 |
-| no_consistency_check | 83/87 | 0.88 | 0 | 0.0 | 0 | 0 |
-| no_burden_check | 86/87 | 0.97 | 0 | 0.0 | 0 | 0 |
-| minimal（全部关闭） | 69/87 | 0.69 | 0 | 0.0 | 0 | 0 |
+| full | 134/134 | 1.0 | 0 | 0.0 | 0 | 0 |
+| no_fact_ledger | 130/134 | 1.0 | 0 | 0.0 | 0 | 0 |
+| no_temporal_check | 128/134 | 0.91 | 0 | 0.0 | 0 | 0 |
+| no_independent_review | 129/134 | 1.0 | 0 | 0.0 | 0 | 0 |
+| no_targeted_revision | 133/134 | 1.0 | 0 | 0.0 | 0 | 0 |
+| no_consistency_check | 128/134 | 0.91 | 0 | 0.0 | 0 | 0 |
+| no_burden_check | 132/134 | 0.97 | 0 | 0.0 | 0 | 0 |
+| minimal（全部关闭） | 114/134 | 0.79 | 0 | 0.0 | 0 | 0 |
 
-按任务组，minimal 基线在“多材料和跨文件”（10/17）与“时间与政策适用”（5/10）上下降最多。
+按任务组，minimal 基线在“多材料和跨文件”（14/21）与“时间与政策适用”（5/10）上下降最多。“文种与行文”59 例在所有变体中都通过：文种判断、权限检查与按文种组织结构属于核心流程，不在可关闭的模块之列，消融不能说明它们的贡献。
 
 消融定位到的模块贡献（关闭后由通过变为失败）：
 
 - 事实账本：材料间数据冲突（FB-03）、两稿测算表数据不同（FB-28）、需求与材料冲突（FB-20）、人工改写造成的事实状态升级（SR-02）；
-- 时效检查：引用已停止执行的 2000 年《国家行政机关公文处理办法》（FB-09）、按 2011 年时点引用尚未施行的条例、已被代替的 1999 版格式标准、地域不符的文件、尚未施行的文件（FB-16～19）；
+- 时效检查：引用已停止执行的 2000 年《国家行政机关公文处理办法》（FB-09）、按 2011 年时点引用尚未施行的条例、已被代替的 1999 版格式标准、地域不符的文件、尚未施行的文件（FB-16～19），综合差错稿中的旧规（FL-17）；
 - 独立审校：事实状态升级、写入未批准事项、人工修改引入的标点问题、同句中拟议改已完成、会议“未作决定”改成“决定”（SR-02～04、SR-18、SR-19）；
 - 定向修订：机械性问题的自动纠正（SR-04）；
-- 一致性检查：表格合计、附件说明标点、正文引用不存在的附件、附件页标题与附件说明不一致（FB-12、FL-04、FL-05、FL-16）；
-- 减负检查：新增高频报送要求（SR-11）。
+- 一致性检查：表格合计、附件说明标点、正文引用不存在的附件、附件页标题与附件说明不一致（FB-12、FL-04、FL-05、FL-16），以及两份综合差错稿（FL-17、FL-18）；
+- 减负检查：新增高频报送要求（SR-11、FL-18）。
 
 ## 五、如何解读
 
