@@ -37,7 +37,7 @@ def layout_document(ir: DocumentIR, out_dir: Path, *, profile_id: str = "gbt9704
             tight += 1
             docx_path, fonts = compile_docx(ir, out_dir / f"{stem}.docx", profile, tight=tight)
             render, rchecks = check_rendering(docx_path, ir, profile, fonts, out_dir)
-            render.notes.append("署名页无正文：已按 GB/T 9704—2012 7.3.5.5 " + ("缩小正文与署名之间的空行行距" if tight == 1 else "缩小空行行距并使正文末段与署名同页"))
+            render.notes.append(("出席名单" if ir.format_type == "jiyao" else "署名") + "所在页无正文：已按 GB/T 9704—2012 7.3.5.5 " + ("缩小正文与署名之间的空行行距" if tight == 1 else "缩小空行行距并使正文末段与署名同页"))
         checks = check_docx(docx_path, profile, ir.title, first_body) + rchecks
     else:
         render = RenderInfo(fonts_requested=sorted(fonts), notes=["配置关闭了实际渲染核验"])

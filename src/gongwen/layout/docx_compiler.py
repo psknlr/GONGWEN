@@ -456,12 +456,14 @@ class Compiler:
     def attendees_block(self) -> None:
         if not self.ir.attendees:
             return
-        self.blank(1)
-        for key in ("出席", "请假", "列席"):
+        # 与署名同理：出席名单不单独落到没有正文的下一面（tight 调整见 gap_pt）
+        if self.tight >= 2:
+            self.keep_last_with_next()
+        self.blank(1, line_pt=self.gap_pt(), keep_next=True)
+        keys = [k for k in ("出席", "请假", "列席") if self.ir.attendees.get(k)]
+        for key in keys:
             names = self.ir.attendees.get(key)
-            if not names:
-                continue
-            par = self.para(left=2 + 3, first=-3)
+            par = self.para(left=2 + 3, first=-3, keep_next=key != keys[-1])
             r = par.add_run(f"{key}：")
             self.set_run(r, self.p.data["jiyao"]["attendee_label_font"], "三号")
             self.add_text(par, "、".join(names))

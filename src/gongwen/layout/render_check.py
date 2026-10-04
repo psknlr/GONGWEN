@@ -250,6 +250,17 @@ def check_rendering(docx: Path, ir: DocumentIR, profile: LayoutProfile, fonts_re
     # 署名页须有正文：署名、成文日期不能单独成页（7.3.5.5：容不下时调整行距、字距解决）
     date_text = _norm(ir.signature.date or "")
     organ_text = _norm(ir.signature.organs[0]) if ir.signature.organs else ""
+    if ir.format_type == "jiyao" and ir.attendees:
+        # 纪要以出席名单收尾：名单所在页同样须有正文
+        key = next(k for k in ("出席", "请假", "列席") if ir.attendees.get(k))
+        date_text, organ_text = "", _norm(f"{key}：{'、'.join(ir.attendees[key])}")[:8]
+        att_page = next((i for i, (_, _, ls) in enumerate(pages) if any(_norm(l.text).startswith(organ_text) for l in ls)), None)
+        if att_page is not None:
+            _, _, ls = pages[att_page]
+            first = next(l for l in ls if _norm(l.text).startswith(organ_text))
+            body_all = _norm("".join(b.text() for b in ir.blocks))
+            has_body = att_page == 0 or any(len(_norm(l.text)) >= 4 and _norm(l.text) in body_all for l in ls if l.y0 < first.y0)
+            checks.append(LayoutCheck(rule_id="LAY-SIGNATURE", item="出席名单与正文同页", expected="名单所在页有正文，不单独成页", actual=f"第{att_page + 1}面" + ("有正文" if has_body else "只有出席名单"), status="pass" if has_body else "fail", clause="GB/T 9704—2012 10.3、7.3.5.5（参照）", note="" if has_body else "出席名单被挤到下一面：应调整行距，或使正文末段与名单同页"))
     if date_text and ir.format_type != "jiyao":
         body_all = _norm("".join(b.text() for b in ir.blocks))
         sig_page = next((i for i, (_, _, ls) in enumerate(pages) if any(_norm(l.text) == date_text for l in ls)), None)
