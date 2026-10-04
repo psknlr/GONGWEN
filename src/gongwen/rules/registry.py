@@ -61,7 +61,7 @@ RULES: dict[str, RuleMeta] = {
         _r("GW-GENRE-007", "对不相隶属单位慎用指令口吻", L.PRACTICE, "实务惯例；条例第八条（十四）函用于不相隶属机关之间", S.MAJOR, "文种", genres={"函"}),
         _r("GW-GENRE-008", "标题由发文机关名称、事由和文种组成", L.REGULATION, f"{_T}第九条（七）", S.MAJOR, "文种", TIAOLI, "第九条"),
         _r("GW-GENRE-009", "紧急程度是版头要素，不写入标题", L.PRACTICE, f"{_G} 7.2.3 将紧急程度列为版头要素；不写入标题属实务", S.MINOR, "文种"),
-        _r("GW-GENRE-010", "批复应引用来文标题和发文字号", L.PRACTICE, "实务惯例", S.MAJOR, "文种", genres={"批复"}),
+        _r("GW-GENRE-010", "批复、复函应引用来文标题和发文字号", L.PRACTICE, "实务惯例", S.MAJOR, "文种", genres={"批复", "函"}),
         _r("GW-GENRE-011", "事务材料需正式下发时由法定文种印发", L.PRACTICE, "实务惯例（方案、办法等不是条例第八条所列文种）", S.MAJOR, "文种"),
         _r("GW-GENRE-012", "请示的用途与文种一致（申请批准应使用请示）", L.REGULATION, f"{_T}第八条（十）（十一）", S.MAJOR, "文种", TIAOLI, "第八条"),
         _r("GW-ROUTE-001", "上行文原则上主送一个上级机关", L.REGULATION, f"{_T}第十五条（一）", S.MAJOR, "行文", TIAOLI, "第十五条", conditional=True),

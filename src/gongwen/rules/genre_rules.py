@@ -144,12 +144,13 @@ def check_closing_and_direction(ctx: CheckContext) -> list[ReviewIssue]:
             hit = next((p for p in kb.lexicon()["command_tone"] if p in s.text), None)
             if hit:
                 out.append(ctx.issue("GW-GENRE-007", IssueType.ADDRESS_MISMATCH, f"函用于不相隶属机关之间，“{hit}”属指令口吻，建议改为商洽、请求语气", block=b, sentence=s))
-    # 批复：引来文
-    if genre == "批复":
+    # 批复、复函：引来文
+    if genre == "批复" or (genre == "函" and ctx.ir.title.endswith("复函")):
         head = "".join(s.text for _, s in sentences[:2])
-        if not (re.search(r"《[^》]+请示》", head) and "收悉" in head):
+        kind = "请示" if genre == "批复" else "函"
+        if sentences and not (re.search(rf"《[^》]+{kind}》", head) and "收悉" in head):
             b, s = sentences[0]
-            out.append(ctx.issue("GW-GENRE-010", IssueType.REQUIRED_MISSING, "批复开头应引用来文标题和发文字号，并写明“收悉”", block=b, sentence=s))
+            out.append(ctx.issue("GW-GENRE-010", IssueType.REQUIRED_MISSING, f"{'批复' if genre == '批复' else '复函'}开头应引用来文标题和发文字号，并写明“收悉”", block=b, sentence=s))
     return out
 
 
