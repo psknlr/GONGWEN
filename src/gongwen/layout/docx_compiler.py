@@ -1,9 +1,12 @@
-"""DocumentIR → DOCX 编译器（GB/T 9704—2012 通用格式、信函格式、纪要格式）。
+"""DocumentIR → DOCX 编译器（GB/T 9704—2012 通用格式、信函格式、命令（令）格式、纪要格式；另有简报报头与
+不设版头的事务文书，均属实务）。
 
 实现要点：
 * “空N字”按字距换算为缩进磅值，“空N行”用与正文同高的空段落，不用空格字符填充；
 * 正文固定行距 579 缇（28.95 磅：225mm ÷ 22 行约 28.99 磅，向下取整到缇，22 行才不超出版心；实务推导），
   3 号字字距 −0.25 磅使每行 28 字不超出版心；
+* 信函格式的发文机关标志（上边缘距上页边 30mm，在天头内）与两条红色双线用锚定于页面的图文框（framePr）定位，
+  正文从图文框下方接排；首页另设空页脚，不显示页码（10.1）；
 * 版记置于锚定在版心底部的浮动表格中，使末条分隔线与最后一面版心下边缘重合；版记估计高于一面版心时
   改为紧接正文的普通表格（浮动表格会越出版心）；
 * 页码奇偶页分设：单页码居右空一字，双页码居左空一字；
@@ -26,7 +29,7 @@ from docx.oxml.ns import qn
 from docx.shared import Mm, Pt, RGBColor, Twips
 
 from ..schemas.ir import Block, DocumentIR
-from .profile import MM_PER_PT, LayoutProfile, split_title, text_width_chars
+from .profile import MM_PER_PT, LayoutProfile, split_balanced, split_title, text_width_chars
 
 PPR_SEQ = [
     "pStyle", "keepNext", "keepLines", "pageBreakBefore", "framePr", "widowControl", "numPr", "suppressLineNumbers",
@@ -58,6 +61,13 @@ def insert_ordered(parent, el, seq: list[str]) -> None:
 RED = RGBColor(0xFF, 0x00, 0x00)
 GRAY = RGBColor(0x80, 0x80, 0x80)
 PLACEHOLDER_RE = re.compile(r"(【待[^】]*】)")
+
+# 图文框内的字位（LibreOffice 实测校准，替代字体文泉驿正黑）：
+# 发文机关标志行距取 1.02 个字高时，字框上缘高出框顶约 0.147 个字高，字形下缘在框顶下约 0.975 个字高；
+# 3 号字行距 579 缇时，字框上缘在框顶下约 2.74mm
+MARK_FRAME_ASCENT = 0.147
+MARK_FRAME_INK_BOTTOM = 0.975
+BODY_FRAME_TEXT_TOP_MM = 2.74
 
 
 class Compiler:
@@ -185,18 +195,25 @@ class Compiler:
             bdr.append(el)
 
     @staticmethod
-    def frame_bottom(par) -> None:
-        """把段落放入锚定于版心底部的框架（版记）。"""
+    def frame(par, y_mm: float, width_mm: float) -> None:
+        """把段落放入锚定于页面的图文框：框顶距上页边 y_mm，宽 width_mm，以版心为准水平居中。
+
+        正文不在图文框两侧环绕（notBeside），遇到图文框时从其下方接排；相邻段落的图文框设置相同则合为一个框。"""
         ppr = par._p.get_or_add_pPr()
         fp = OxmlElement("w:framePr")
-        fp.set(qn("w:w"), str(int(round(156 / MM_PER_PT * 20))))
-        fp.set(qn("w:hSpace"), "0")
-        fp.set(qn("w:wrap"), "notBeside")
-        fp.set(qn("w:vAnchor"), "margin")
-        fp.set(qn("w:hAnchor"), "margin")
-        fp.set(qn("w:xAlign"), "center")
-        fp.set(qn("w:yAlign"), "bottom")
+        for k, v in (("w:w", round(width_mm / MM_PER_PT * 20)), ("w:hSpace", 0), ("w:vSpace", 0), ("w:wrap", "notBeside"), ("w:vAnchor", "page"), ("w:hAnchor", "margin"), ("w:xAlign", "center"), ("w:y", round(y_mm / MM_PER_PT * 20))):
+            fp.set(qn(k), str(v))
         insert_ordered(ppr, fp, PPR_SEQ)
+
+    def double_rule(self, y_mm: float, top_pt: float, bottom_pt: float) -> float:
+        """红色双线（信函格式 10.1）：只有上下边框的图文框段落，上缘距上页边 y_mm，两线间隔为段落行高。
+        返回双线总高（mm）。用两条单线边框而不用 OOXML 的双线边框样式：后者粗细线的上下次序各软件解释不一。"""
+        lt = self.p.data["letter"]
+        par = self.para(line_pt=lt["rule_gap_pt"])
+        self.border(par, "top", "FF0000", top_pt)
+        self.border(par, "bottom", "FF0000", bottom_pt)
+        self.frame(par, y_mm, lt["rule_length_mm"])
+        return (top_pt + lt["rule_gap_pt"] + bottom_pt) * MM_PER_PT
 
     def field(self, par, instr: str, font: str, size: str) -> None:
         run = par.add_run()
@@ -270,7 +287,8 @@ class Compiler:
             self.field(par, "PAGE", font, size)
             r = par.add_run(" —")
             self.set_run(r, font, size, spacing=False)
-        if self.ir.format_type == "letter" and not self.p.data["letter"].get("first_page_number", True):
+        no_first_number = self.ir.format_type == "letter" and not self.p.data["letter"].get("first_page_number", True)
+        if no_first_number:
             s.different_first_page_header_footer = True
         if self.draft_label:
             key = "format_label" if self.imported else "draft_label"
@@ -285,31 +303,21 @@ class Compiler:
                 hp.alignment = WD_ALIGN_PARAGRAPH.CENTER
                 r = hp.add_run(label)
                 self.set_run(r, "songti", "小四", color=GRAY, spacing=False)
+        if no_first_number:
+            # 首页不显示页码（10.1）：另设空的首页页脚。须在首页页眉之后添加——首页页脚的引用排在首页页眉之前时，
+            # LibreOffice 首页仍显示奇数页页脚（实测）
+            s.first_page_footer.is_linked_to_previous = False
 
     # ------------------------------------------------------------------ 版头
-    def header_block(self) -> None:
-        ir, h = self.ir, self.ir.header
-        fmt = ir.format_type
-        if fmt == "plain":
-            return  # 事务文书（方案、总结、讲话稿等）不设版头
-        lines_used = 0
-        for val, key in ((h.copy_no, "copy_no"), (h.secrecy, "secrecy"), (h.urgency, "urgency")):
-            if val:
-                el = self.p.el(key)
-                self.para(val, font=el["font"], size=el["size"])
-                lines_used += 1
-        mark = h.organ_mark or ""
-        if fmt == "letter":
-            top_mm = self.p.data["letter"]["organ_mark_top_from_page_mm"] - self.p.margins["top"]
-        elif fmt == "command":
-            top_mm = self.p.data["command"]["organ_mark_top_from_type_area_mm"]
-        elif fmt == "jiyao":
-            top_mm = self.p.data["jiyao"]["mark_top_from_type_area_mm"]
-        else:
-            top_mm = self.p.el("organ_mark")["top_from_type_area_mm"]
-        size_pt = min(self.p.size(self.p.el("organ_mark")["max_size"]), (self.p.type_width_pt * 0.96) / max(1.0, text_width_chars(mark or "文")))
+    def mark_size(self, mark: str, max_size: str | None = None) -> float:
+        """发文机关标志字号：不大于 max_size（默认小初），且一行排得下（国标未规定字号，实务按版面确定）。"""
+        cap = self.p.size(max_size or self.p.el("organ_mark")["max_size"])
+        return min(cap, (self.p.type_width_pt * 0.96) / max(1.0, text_width_chars(mark or "文")))
+
+    def mark_line(self, mark: str, top_mm: float, size_pt: float, lines_used: int = 0) -> None:
+        """红色小标宋的发文机关标志（简报名称）居中，上边缘至版心上边缘 top_mm；其上已排 lines_used 行。"""
         # 固定行距小于字体自然行高时，字框上缘会高出行顶约 0.13 个字高（LibreOffice 实测校准，网格行距 579 缇），
-        # 补入间距，使字上缘落在 35mm 处
+        # 补入间距，使字上缘落在 top_mm 处
         gap_pt = top_mm / MM_PER_PT - lines_used * self.p.line_pt + (0.13 * size_pt if mark else 0)
         if gap_pt > 1:
             self.para(line_pt=gap_pt)
@@ -317,14 +325,32 @@ class Compiler:
             par = self.para(align=WD_ALIGN_PARAGRAPH.CENTER, line_pt=size_pt * 1.02)
             run = par.add_run(mark)
             self.set_run(run, "xiaobiaosong", size_pt, color=RED, spacing=False)
+
+    def header_block(self) -> None:
+        ir, h = self.ir, self.ir.header
+        fmt = ir.format_type
+        if fmt == "plain":
+            return  # 事务文书（方案、总结、讲话稿等）不设版头
         if fmt == "letter":
-            rule = self.para(line_pt=4 / MM_PER_PT)
-            self.border(rule, "top", "FF0000", 2.25)
-            self.blank(1)
-            if h.doc_number:
-                par = self.para(self.short_placeholder(h.doc_number, "【待编号】"), align=WD_ALIGN_PARAGRAPH.RIGHT)
-            self.blank(1)
+            self.letter_header()
             return
+        if fmt == "brief":
+            self.brief_header()
+            return
+        lines_used = 0
+        for val, key in ((h.copy_no, "copy_no"), (h.secrecy, "secrecy"), (h.urgency, "urgency")):
+            if val:
+                el = self.p.el(key)
+                self.para(val, font=el["font"], size=el["size"])
+                lines_used += 1
+        mark = h.organ_mark or ""
+        if fmt == "command":
+            top_mm = self.p.data["command"]["organ_mark_top_from_type_area_mm"]
+        elif fmt == "jiyao":
+            top_mm = self.p.data["jiyao"]["mark_top_from_type_area_mm"]
+        else:
+            top_mm = self.p.el("organ_mark")["top_from_type_area_mm"]
+        self.mark_line(mark, top_mm, self.mark_size(mark), lines_used)
         if fmt in ("jiyao",):
             rule = self.para(line_pt=self.p.line_pt)
             self.border(rule, "bottom", "FF0000", self.p.el("red_rule")["width_pt"], 0)
@@ -332,9 +358,10 @@ class Compiler:
             return
         if fmt == "command":
             # 命令（令）格式（10.2）：发文机关标志下空二行居中编排令号，令号下空二行编排正文；不设分隔线与标题
-            self.blank(2)
+            n = self.p.data["command"]["number_blank_lines"]
+            self.blank(n)
             self.para(self.short_placeholder(h.doc_number, "第【待编号】号"), align=WD_ALIGN_PARAGRAPH.CENTER)
-            self.blank(2)
+            self.blank(n)
             return
         self.blank(self.p.el("doc_number")["blank_lines_after_mark"])
         upward = ir.direction == "上行文"
@@ -357,18 +384,85 @@ class Compiler:
         rr = self.p.el("red_rule")
         self.border(par, "bottom", rr["color"], rr["width_pt"], rr["below_doc_number_mm"] / MM_PER_PT)
 
+    def letter_header(self) -> None:
+        """信函格式（10.1）：发文机关标志上边缘至上页边 30mm；标志下 4mm 处印一条红色双线（上粗下细），距下页边
+        20mm 处印一条红色双线（上细下粗），线长均为 170mm，居中排布；份号、密级和保密期限、紧急程度顶格居版心左边缘、
+        发文字号顶格居版心右边缘，编排在第一条双线下，与该线的距离为 3 号汉字高度的 7/8。
+
+        标志在天头内、第二条双线在版心之下，流式段落排不到，因此各要素都放在锚定于页面的图文框中，由计算得到的
+        框顶位置定位；正文从最下一个图文框下方接排。图文框的锚定段落都在首页，第二条双线因而只出现在首页。"""
+        h, lt = self.ir.header, self.p.data["letter"]
+        mark = h.organ_mark or ""
+        y = lt["organ_mark_top_from_page_mm"]  # 标志上边缘
+        if mark:
+            size_pt = self.mark_size(mark)
+            size_mm = size_pt * MM_PER_PT
+            par = self.para(align=WD_ALIGN_PARAGRAPH.CENTER, line_pt=size_pt * 1.02)
+            run = par.add_run(mark)
+            self.set_run(run, "xiaobiaosong", size_pt, color=RED, spacing=False)
+            frame_y = y + MARK_FRAME_ASCENT * size_mm
+            self.frame(par, frame_y, self.p.data["type_area"]["width_mm"])
+            y = frame_y + MARK_FRAME_INK_BOTTOM * size_mm  # 标志下边缘
+        thick, thin = lt["rule_thick_pt"], lt["rule_thin_pt"]
+        rule_y = y + lt["rule_below_mark_mm"]
+        rule_h = self.double_rule(rule_y, thick, thin)
+        self.double_rule(self.p.data["page"]["height_mm"] - lt["bottom_rule_from_page_mm"] - rule_h, thin, thick)
+        lefts = [(val, key) for val, key in ((h.copy_no, "copy_no"), (h.secrecy, "secrecy"), (h.urgency, "urgency")) if val]
+        doc_number = self.short_placeholder(h.doc_number, "【待编号】") if h.doc_number else ""
+        if not (lefts or doc_number):
+            return
+        # 第一个要素与发文字号同排一行（左、右），其余要素自上而下分行；字框上缘距第一条双线 7/8 个 3 号字高
+        el_y = rule_y + rule_h + lt["element_gap_ratio"] * self.p.body_pt * MM_PER_PT - BODY_FRAME_TEXT_TOP_MM
+        for i in range(max(1, len(lefts))):
+            par = self.para()
+            if i < len(lefts):
+                val, key = lefts[i]
+                el = self.p.el(key)
+                self.add_text(par, val, font=el["font"], size=el["size"])
+            if i == 0 and doc_number:
+                par.paragraph_format.tab_stops.add_tab_stop(Pt(self.p.type_width_pt), WD_TAB_ALIGNMENT.RIGHT)
+                self.add_text(par, f"\t{doc_number}")
+            self.frame(par, el_y, self.p.data["type_area"]["width_mm"])
+
+    def brief_header(self) -> None:
+        """简报报头（实务：GB/T 9704—2012 未规定简报格式）：红色简报名称居中，下空一行居中编排期号，再空一行左编印单位、
+        右日期，其下 4mm 印红色分隔线；分隔线下空二行编排文章标题。简报不署名、不设版记。"""
+        h, b = self.ir.header, self.p.data["brief"]
+        mark = h.organ_mark or "工作简报"
+        self.mark_line(mark, b["mark_top_from_type_area_mm"], self.mark_size(mark, b["mark_size"]))
+        self.blank(b["issue_blank_lines"])
+        if h.doc_number:
+            self.para(self.short_placeholder(h.doc_number, "第【待编号】期"), align=WD_ALIGN_PARAGRAPH.CENTER)
+        self.blank(b["issuer_blank_lines"])
+        issuer = self.ir.meta.get("brief_issuer") or next((o for o in self.ir.signature.organs if o), "") or b["issuer_placeholder"]
+        date = self.ir.meta.get("brief_date") or b["date_placeholder"]
+        par = self.para()
+        self.add_text(par, issuer)
+        par.paragraph_format.tab_stops.add_tab_stop(Pt(self.p.type_width_pt), WD_TAB_ALIGNMENT.RIGHT)
+        self.add_text(par, f"\t{date}")
+        self.border(par, "bottom", "FF0000", b["rule_width_pt"], b["rule_below_mm"] / MM_PER_PT)
+
     # ------------------------------------------------------------------ 主体
     def title_block(self) -> None:
         el = self.p.el("title")
+        fmt = self.ir.format_type
         if self.ir.title:
-            self.blank(el["blank_lines_before"])
+            if fmt == "plain":
+                before = 0  # 事务文书不设版头：标题从版心第一行起排（实务）
+            elif fmt == "letter":
+                before = self.p.data["letter"]["title_blank_lines"]  # 与其上最后一个要素相距二行（10.1）
+            else:
+                before = el["blank_lines_before"]  # 红色分隔线下空二行（7.3.1）
+            self.blank(before)
             issuer = self.ir.signature.organs[0] if self.ir.signature.organs else ""
             for line in split_title(self.ir.title, el["max_chars_per_line"], issuer):
                 self.para(line, font="xiaobiaosong", size=el["size"], align=WD_ALIGN_PARAGRAPH.CENTER, keep_next=True)
         if self.ir.title_note:
-            # 题注（实务）：标题下居中，楷体
-            par = self.para(align=WD_ALIGN_PARAGRAPH.CENTER, keep_next=True)
-            self.add_text(par, self.ir.title_note, font="kaiti")
+            # 题注（实务）：标题下居中，楷体 3 号；一行排不下时均衡回行，不让“通过）”之类的短尾单独成行
+            tn = self.p.el("title_note")
+            for line in split_balanced(self.ir.title_note, self.p.data["grid"]["chars_per_line"]):
+                par = self.para(align=WD_ALIGN_PARAGRAPH.CENTER, keep_next=True)
+                self.add_text(par, line, font=tn["font"], size=tn["size"])
         if self.ir.salutation:
             self.blank(1)
             self.para(self.ir.salutation)
@@ -512,6 +606,8 @@ class Compiler:
 
     def imprint_block(self) -> None:
         """版记：以锚定于版心底部的浮动表格实现，首末条分隔线为粗线、中间为细线（7.4.1 推荐值）。"""
+        if self.ir.format_type in ("plain", "brief"):
+            return  # 事务文书、简报不是正式行文，不设版记（实务）
         imp = self.ir.imprint
         el = self.p.el("imprint")
         size = el["size"]
@@ -620,7 +716,7 @@ class Compiler:
         self.attachment_note_block()
         if self.ir.format_type == "jiyao":
             self.attendees_block()
-        else:
+        elif self.ir.format_type != "brief":  # 简报不署名（实务）
             self.signature_block()
         self.attachments_block()
         self.imprint_block()

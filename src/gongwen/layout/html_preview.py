@@ -5,7 +5,7 @@ from __future__ import annotations
 import html
 
 from ..schemas.ir import Block, DocumentIR
-from .profile import split_title
+from .profile import LayoutProfile, split_balanced, split_title
 
 CSS = """
 .gw-doc{font-family:"FangSong","仿宋","仿宋_GB2312","STFangsong","Songti SC",serif;font-size:16pt;line-height:28.95pt;color:var(--doc-ink,#111);
@@ -82,7 +82,14 @@ def render_document(ir: DocumentIR, flags: dict[str, str] | None = None, label: 
     if h.organ_mark:
         parts.append(f'<div class="mark">{esc(h.organ_mark)}</div>')
     doc_number = "【待编号】" if h.doc_number.startswith("【待") else h.doc_number
-    if ir.format_type not in ("jiyao",):
+    if ir.format_type == "brief":
+        # 简报报头（实务）：期号居中，其下左编印单位、右日期，再下红色分隔线
+        b = LayoutProfile.load().data["brief"]
+        issuer = ir.meta.get("brief_issuer") or next((o for o in ir.signature.organs if o), "") or b["issuer_placeholder"]
+        if h.doc_number:
+            parts.append(f'<p class="flush" style="text-align:center">{esc(h.doc_number)}</p>')
+        parts.append(f'<div class="docno up"><span>{esc(issuer)}</span><span>{esc(ir.meta.get("brief_date") or b["date_placeholder"])}</span></div>')
+    elif ir.format_type not in ("jiyao", "plain"):
         if ir.direction == "上行文":
             signers = "　".join(h.signers) if h.signers else "【待签发人】"
             parts.append(f'<div class="docno up"><span>{esc(doc_number)}</span><span>签发人：{esc(signers)}</span></div>')
@@ -92,7 +99,8 @@ def render_document(ir: DocumentIR, flags: dict[str, str] | None = None, label: 
     if ir.title:
         parts.append('<div class="title">' + "<br>".join(esc(x) for x in split_title(ir.title, 20, issuer)) + "</div>")
     if ir.title_note:
-        parts.append(f'<p class="flush" style="text-align:center;font-family:KaiTi,楷体,serif">{esc(ir.title_note)}</p>')
+        note = "<br>".join(esc(x) for x in split_balanced(ir.title_note, 28))
+        parts.append(f'<p class="flush" style="text-align:center;font-family:KaiTi,楷体,serif">{note}</p>')
     if ir.salutation:
         parts.append(f'<p class="flush">{esc(ir.salutation)}</p>')
     if ir.recipients:
@@ -104,7 +112,9 @@ def render_document(ir: DocumentIR, flags: dict[str, str] | None = None, label: 
     if ir.attendees:
         for k, v in ir.attendees.items():
             parts.append(f'<p><b>{esc(k)}：</b>{esc("、".join(v))}</p>')
-    if ir.signature.seal_mode == "signature_stamp":
+    if ir.format_type == "brief":
+        pass  # 简报不署名（实务）
+    elif ir.signature.seal_mode == "signature_stamp":
         parts.append(f'<div class="sig"><div>{esc(ir.signature.signer_title or "【待补：签发人职务】")}　　【签名章】</div><div>{esc(ir.signature.date)}</div></div>')
     elif ir.signature.seal_mode != "none":
         parts.append('<div class="sig">' + "".join(f"<div>{esc(o)}</div>" for o in ir.signature.organs) + f"<div>{esc(ir.signature.date)}</div></div>")
@@ -114,7 +124,7 @@ def render_document(ir: DocumentIR, flags: dict[str, str] | None = None, label: 
     for att in ir.attachments:
         parts.append(f'<div class="att"><p class="flush h1">{"附件" if single else f"附件{att.seq}"}</p><div class="title">{esc(att.title)}</div>{_blocks(att.blocks, flags)}</div>')
     imp = ir.imprint
-    if imp.cc or imp.printer:
+    if (imp.cc or imp.printer) and ir.format_type not in ("plain", "brief"):  # 事务文书、简报不设版记
         rows = []
         if imp.main_moved:
             rows.append(f"<div>主送：{esc('，'.join(imp.main_moved))}。</div>")
