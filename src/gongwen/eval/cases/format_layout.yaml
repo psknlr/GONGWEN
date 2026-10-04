@@ -323,3 +323,58 @@
   expect:
     genre: 函
     rules_present: [GW-GENRE-004, GW-GENRE-006, GW-GENRE-007]
+
+- id: FL-21
+  task_group: adversarial
+  kind: check
+  title: 地方政府部门以本部门名义发“令”（命令只能由有权机关发布）
+  text: |
+    示例区教育局令
+    第1号
+    为加强校园安全管理，现决定在全区中小学实施封闭式管理。
+    局长　赵某
+    2026年4月1日
+  expect:
+    genre: 命令（令）
+    rules_present: [GW-GENRE-013]
+
+- id: FL-22
+  task_group: adversarial
+  kind: check
+  title: 政府部门提出议案并主送本级政府（议案只能由政府向人大提请）
+  text: |
+    示例市卫生健康委员会关于提请审议《示例市院前医疗急救条例（草案）》的议案
+    示例市人民政府：
+    为规范院前医疗急救工作，我委起草了《示例市院前医疗急救条例（草案）》，现提请审议。
+    示例市卫生健康委员会
+    2026年4月1日
+  expect:
+    genre: 议案
+    rules_present: [GW-GENRE-014]
+
+- id: FL-23
+  task_group: single
+  kind: check
+  control: true
+  title: 对照：人民政府令与部门令（令号、签发人职务姓名落款，不应有重要以上问题）
+  text: |
+    示例市人民政府令
+    第12号
+    《示例市城市绿化管理办法》已经2026年3月20日市人民政府第15次常务会议通过，现予公布，自2026年5月1日起施行。
+    市长　李某
+    2026年4月1日
+  expect:
+    genre: 命令（令）
+    rules_absent: [GW-GENRE-013, GW-GENRE-008, GW-FMT-001]
+    max_issues: {阻断送审: 0, 重要: 0}
+
+- id: FL-24
+  task_group: adversarial
+  kind: check
+  title: 决议未写明通过的会议（决议须为会议讨论通过的事项）
+  text: |
+    示例市卫生健康委员会关于加强基层医疗卫生服务能力建设的决议
+    为提升基层医疗卫生服务能力，决定2026年新建基层医疗示范点12个，各单位要抓好落实。
+  expect:
+    genre: 决议
+    rules_present: [GW-GENRE-015]

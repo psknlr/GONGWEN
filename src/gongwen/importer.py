@@ -34,6 +34,8 @@ ATT_HEAD = re.compile(r"^附件\s*(\d{0,2})$")
 PRINT_LINE = re.compile(r"^(.+?)\s+(\d{4}年\d{1,2}月\d{1,2}日)\s*印发$")
 SECRECY = re.compile(r"(绝密|机密|秘密)(★.*)?$")
 URGENCY = {"特急", "加急", "特提", "平急"}
+# 签发人职务与姓名，如“市长　李某”“主任 张某”
+SIGNER_LINE = re.compile(r"^[^\s]{0,16}?(总理|主席|省长|自治区主席|市长|州长|县长|区长|旗长|部长|主任|局长|厅长|署长|行长|委员长)\s+[^\s]{2,4}$")
 PUNCT_END = "。；！？，、：:;!?"
 # 版头发文字号（含不规范写法，如“示卫发[2026]第05号”，以便格式检查指出问题）
 LOOSE_DOCNO = re.compile(r"^([一-鿿]{1,12}\s*[〔\[［(（【]\s*\d{4}\s*[〕\]］)）】]\s*第?\s*\d+\s*号)")
@@ -73,6 +75,12 @@ def _is_header_line(line: str) -> str | None:
         return "doc_number"
     if line.endswith("文件") and len(line) <= 30:
         return "organ_mark"
+    if line.endswith("令") and len(line) <= 30 and "关于" not in line and not re.search(r"[，。、：:]", line):
+        return "organ_mark"  # 命令（令）格式的发文机关标志，如“××市人民政府令”
+    if re.fullmatch(r"(\d{4}\s*年\s*)?第\s*[0-9一二三四五六七八九十百零〇]+\s*号", line):
+        return "order_number"  # 令号
+    if re.fullmatch(r"(第\s*\d+\s*期|\d{4}年第\s*\d+\s*期)", line):
+        return "issue_number"  # 简报期号
     if re.fullmatch(r"【待(编号|填写发文字号|补：发文字号)[^】]*】", line):
         return "doc_number_placeholder"  # 本系统排版稿中发文字号的待填占位
     return None
@@ -147,12 +155,18 @@ def ir_from_text(text: str, *, doc_id: str = "EXT", genre: str | None = None, di
             m = re.search(r"签发人[：:]\s*(.+)$", lines[i])
             if m:
                 signers = [s for s in re.split(r"[\s、，]+", m.group(1)) if s]
+        elif kind in ("order_number", "issue_number"):
+            header.doc_number = re.sub(r"\s+", "", lines[i])
         elif kind != "doc_number_placeholder":
             setattr(header, kind, lines[i])
         i += 1
     header.signers = signers
-    title = lines[i] if i < len(lines) else ""
-    i += 1
+    command = header.organ_mark.endswith("令")
+    if command and i < len(lines) and (lines[i][-1:] in PUNCT_END or len(lines[i]) > 40):
+        title = ""  # 命令（令）一般不设标题，令号后即为正文
+    else:
+        title = lines[i] if i < len(lines) else ""
+        i += 1
     # 标题分行（PDF、手工断行常见）：其后至多两行都无句末标点、最后一行以文种结尾时合并为标题
     if not _genre_of_title(title) and title[-1:] not in PUNCT_END:
         for k in (1, 2):
@@ -233,7 +247,10 @@ def ir_from_text(text: str, *, doc_id: str = "EXT", genre: str | None = None, di
     if table_buf:
         blocks.append(b.table(table_buf))
 
-    g = genre or _genre_of_title(title)
+    if sig.organs and SIGNER_LINE.match(sig.organs[-1]):
+        # 令、议案等的落款为签发人职务和姓名（加盖签名章），不是机关署名
+        sig.seal_mode, sig.signer_title = "signature_stamp", sig.organs.pop()
+    g = genre or _genre_of_title(title) or ("命令（令）" if command else None)
     info = kb.genre(g) if g else None
     if direction is None:
         direction = "上行文" if signers else (info.directions[0] if info and info.directions else "")

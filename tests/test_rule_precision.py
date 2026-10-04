@@ -134,3 +134,13 @@ def test_policy_region_must_contain_task_region():
     assert lib.applicability(doc, date(2026, 6, 1), region="浙江省杭州市余杭区").region_ok is True
     # 文件地域比任务地域小（市级文件用于全省事项）：不适用
     assert lib.applicability(doc, date(2026, 6, 1), region="浙江省").region_ok is False
+
+
+def test_command_format_import_and_issuer():
+    from gongwen.rules.genre_rules import may_issue_order
+
+    ir = ir_from_text("示例市人民政府令\n2026年第12号\n《示例市城市绿化管理办法》已经市人民政府常务会议通过，现予公布。\n市长　李某\n2026年4月1日")
+    assert (ir.header.organ_mark, ir.header.doc_number, ir.title, ir.genre) == ("示例市人民政府令", "2026年第12号", "", "命令（令）")
+    assert ir.signature.seal_mode == "signature_stamp" and ir.signature.signer_title == "市长 李某" and not ir.signature.organs
+    assert may_issue_order("示例市人民政府") and may_issue_order("中华人民共和国交通运输部") and may_issue_order("国家市场监督管理总局")
+    assert not may_issue_order("示例市卫生健康委员会") and not may_issue_order("示例区教育局") and not may_issue_order("示例集团有限公司")

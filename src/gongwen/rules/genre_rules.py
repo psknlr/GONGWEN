@@ -250,6 +250,46 @@ def _looks_lower(organ: str, issuer: str) -> bool:
     return li >= 0 and lo > li
 
 
+_LOCAL_ORGAN = re.compile(r"(省|自治区|市(?!场)|自治州|县|盟|旗|[^地]区)")
+_NON_ADMIN = re.compile(r"(公司|集团|大学|学院|学校|医院|中心|协会|学会|商会|研究院|研究所)")
+
+
+def may_issue_order(issuer: str) -> bool:
+    """能否以本机关名义发布命令（令）。
+
+    国务院、国家主席及各级人民政府可以发令；国务院部门以部门令公布部门规章（《规章制定程序条例》）。
+    地方政府部门、企事业单位和社会组织不得发令。
+    """
+    issuer = re.sub(r"(文件|令)$", "", issuer.strip())
+    if issuer.endswith("人民政府") or issuer.startswith(("国务院", "中华人民共和国", "中央军事委员会")):
+        return True
+    return not (_LOCAL_ORGAN.search(issuer) or _NON_ADMIN.search(issuer))
+
+
+def check_issuer_genre(ctx: CheckContext) -> list[ReviewIssue]:
+    """只能由特定机关使用的文种（外部文稿检查；起草流程中由权限判断给出同样结论）。"""
+    out: list[ReviewIssue] = []
+    ir = ctx.ir
+    if ctx.genre is not None and ctx.genre.authority_findings:
+        return out
+    # 发文机关标志优先：命令（令）的落款是签发人职务和姓名，不是机关名称
+    m = re.match(r"^(.{2,30}?)关于", ir.title or "")
+    issuer = re.sub(r"(文件|令)$", "", ir.header.organ_mark or "") or (ir.signature.organs[0] if ir.signature.organs else "") or (m.group(1) if m else "")
+    if not issuer:
+        return out
+    if ir.genre == "命令（令）" and not may_issue_order(issuer):
+        out.append(ctx.issue("GW-GENRE-013", IssueType.AUTHORITY, f"“{issuer}”不是有权发布命令（令）的机关；地方规章以人民政府令公布，政府部门不得以本部门名义发令", field_name="genre", needs_human=True))
+    if ir.genre == "议案":
+        if not issuer.endswith("人民政府"):
+            out.append(ctx.issue("GW-GENRE-014", IssueType.AUTHORITY, f"议案只能由人民政府向同级人民代表大会或其常务委员会提请审议，“{issuer}”不能以本机关名义提出", field_name="genre", needs_human=True))
+        bad = [r for r in ir.recipients if "人民代表大会" not in r]
+        if bad:
+            out.append(ctx.issue("GW-GENRE-014", IssueType.ROUTING, f"议案的主送机关应为同级人民代表大会或其常务委员会（当前：{'、'.join(bad)}）", field_name="recipients", severity=Severity.MAJOR, needs_human=True))
+    if ir.genre == "决议" and not (re.search(r"通过", ir.title_note) or any("通过" in s.text for _, s in ir.iter_sentences(include_attachments=False))):
+        out.append(ctx.issue("GW-GENRE-015", IssueType.REQUIRED_MISSING, "决议须为会议讨论通过的事项：应在题注或正文中写明通过的会议和日期", field_name="title_note", needs_human=True))
+    return out
+
+
 def check_routing(ctx: CheckContext) -> list[ReviewIssue]:
     out: list[ReviewIssue] = []
     ir = ctx.ir
@@ -309,4 +349,4 @@ def _rule_ids() -> set[str]:
     return set(RULES)
 
 
-CHECKERS = [check_title, check_closing_and_direction, check_address_terms, check_single_matter, check_routing]
+CHECKERS = [check_title, check_closing_and_direction, check_address_terms, check_single_matter, check_issuer_genre, check_routing]

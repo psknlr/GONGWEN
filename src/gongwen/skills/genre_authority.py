@@ -9,7 +9,7 @@ from __future__ import annotations
 import re
 
 from ..knowledge import kb
-from ..rules.genre_rules import detect_request_matters
+from ..rules.genre_rules import detect_request_matters, may_issue_order
 from ..rules.registry import citation
 from ..schemas.genre import AuthorityFinding, GenreDecision, ProcedureRequirement
 from ..schemas.sources import SourceBundle
@@ -193,7 +193,7 @@ class GenreAuthoritySkill(Skill):
                     AuthorityFinding(code="MULTI_MAIN", message="上行文原则上主送一个上级机关，根据需要同时抄送相关上级机关和同级机关", severity="一般", basis=[citation("GW-ROUTE-001")])
                 )
         # 只能由特定机关使用的文种
-        if genre == "命令（令）" and iname and not (iname.endswith("人民政府") or iname.startswith(("国务院", "中华人民共和国"))):
+        if genre == "命令（令）" and iname and not may_issue_order(iname):
             d.authority_findings.append(
                 AuthorityFinding(
                     code="ORDER_ISSUER",
