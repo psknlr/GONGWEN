@@ -47,7 +47,7 @@ gongwen serve --open                         # 本地审阅工作台（仅本机
 gongwen task revise <任务> --fact F-00x=40   # 关键数据变更：联动正文、合计与附件
 ```
 
-完整演示见 [`examples/demo/README.md`](examples/demo/README.md)。只想检查或排版一份已有文稿：
+完整演示见 [`examples/demo/README.md`](examples/demo/README.md)；批复、纪要、印发类通知与差错检查的示例见 [`examples/more/README.md`](examples/more/README.md)。只想检查或排版一份已有文稿：
 
 ```bash
 gongwen check examples/drafts/通知稿.txt     # 文种、行文、依据时效、减负、标点数字、附件与合计、要素格式
