@@ -9,14 +9,20 @@
 
 from __future__ import annotations
 
+import functools
 import json
+import os
+import re
+import secrets
+import threading
 import traceback
+from contextlib import contextmanager
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from ..harness.budget import BudgetExceeded
+from ..harness.budget import BudgetExceeded, BudgetGuard
 from ..harness.permissions import Action, Principal, channel, human
 from ..harness.session import SessionLog
 from ..knowledge.stores import TaskStore, safe_id
@@ -43,6 +49,34 @@ from ..skills.fact_ledger import add_human_fact, confirm_facts
 from . import checkpoints as cpk
 
 TERMINAL = {Stage.SUBMITTED, Stage.APPROVED, Stage.FAILED, Stage.BLOCKED}
+# 已形成文稿并进入审校及其后的阶段：只有这些阶段可以发起人工修订；同一事项的事实变更也只把这些文稿退回审校
+REVISABLE = {Stage.REVIEW, Stage.REVISION, Stage.LAYOUT, Stage.HUMAN_REVIEW, Stage.SUBMITTED, Stage.APPROVED}
+# 修订或同一事项联动只作废这两类节点（随文稿重新审校而重新产生）；材料准入、权限等节点必须由人处理
+REDRAFT_CHECKPOINTS = {CheckpointKind.HUMAN_REVIEW, CheckpointKind.REVIEW_ESCALATION}
+
+# C0/C1 控制字符（保留换行）：回车、终端转义序列等可在终端中遮盖真实内容
+_CONTROL_CHARS = re.compile(r"[\x00-\x09\x0b-\x1f\x7f-\x9f]")
+
+
+def strip_controls(text: str) -> str:
+    """去除提交文本中的控制字符，防止模型通道以回车、转义序列向人工隐藏真实内容。"""
+    return _CONTROL_CHARS.sub("", text)
+
+
+# 同一事项的状态读-改-写串行执行：本地审阅服务是多线程的，同一进程内的多个引擎实例共用这些锁
+_MATTER_LOCKS: dict[tuple[str, str], threading.RLock] = {}
+_MATTER_LOCKS_GUARD = threading.Lock()
+
+
+def _serialized(fn):
+    """按任务所属事项加锁执行，防止并发请求重复处理同一审核节点或互相覆盖状态。"""
+
+    @functools.wraps(fn)
+    def wrapper(self: "Engine", task_id: str, *args, **kwargs):
+        with self._matter_lock(task_id):
+            return fn(self, task_id, *args, **kwargs)
+
+    return wrapper
 
 
 class AdmissionList:
@@ -79,7 +113,18 @@ class Engine:
         return TaskState.model_validate_json(p.read_text(encoding="utf-8"))
 
     def save_state(self, st: TaskState) -> None:
-        (self.store.task_dir(st.task_id) / "state.json").write_text(st.model_dump_json(indent=2), encoding="utf-8")
+        p = self.store.task_dir(st.task_id) / "state.json"
+        tmp = p.with_name(f".state.{os.getpid()}.{threading.get_ident()}.tmp")
+        tmp.write_text(st.model_dump_json(indent=2), encoding="utf-8")
+        os.replace(tmp, p)  # 原子替换：并发读取不会读到写了一半的状态
+
+    @contextmanager
+    def _matter_lock(self, task_id: str):
+        key = (str(self.rt.data_dir.resolve()), self.load_state(task_id).matter_id)
+        with _MATTER_LOCKS_GUARD:
+            lock = _MATTER_LOCKS.setdefault(key, threading.RLock())
+        with lock:
+            yield
 
     def log(self, task_id: str) -> SessionLog:
         return self.rt.session_log(task_id)
@@ -96,27 +141,56 @@ class Engine:
         router = self.rt.router(log, st.budget, self.providers)
         return SkillContext(runtime=self.rt, state=st, log=log, router=router, clearances=self._clearances(st))
 
-    def _require(self, by: Principal, action: Action, matter_id: str | None = None) -> None:
-        self.rt.permissions.require(by, action, matter_id)
+    def _require(self, by: Principal, action: Action, matter_id: str | None = None, clearance: Clearance | None = None) -> None:
+        self.rt.permissions.require(by, action, matter_id, clearance)
+
+    def _new_ids(self) -> tuple[str, str]:
+        """任务与默认事项标识：时间戳加随机后缀，并避开已存在的标识（同一毫秒内创建的任务不会互相覆盖）。"""
+        matters = self.rt.data_dir / "matters"
+        while True:
+            stamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S%f")[:-3]
+            suffix = secrets.token_hex(3)
+            task_id, matter_id = f"T{stamp}-{suffix}", f"M{stamp}-{suffix}"
+            if not self.store.exists(task_id) and not (matters / matter_id).exists():
+                return task_id, matter_id
+
+    def _purge_material(self, matter_id: str, material_id: str) -> None:
+        """删除不予准入的材料。原始文件按内容哈希存放：同一事项其他材料引用同一文件时只删除本材料的登记。
+
+        MaterialStore.purge 会连同原始文件一并删除，此处删除后为仍在引用的材料按原样恢复原始文件与登记。
+        """
+        store = self.rt.materials
+        mat = store.get(matter_id, material_id)
+        shared = next((m for m in store.list(matter_id) if m.sha256 == mat.sha256 and m.material_id != material_id), None)
+        data = store.read_bytes(shared) if shared is not None else None
+        store.purge(matter_id, material_id)
+        if shared is not None:
+            store.put(matter_id, shared.material_id, shared.filename, data, shared.uploaded_by, shared.declared_clearance, shared.role, shared.description)
+            store.save_meta(shared)
 
     # ================================================================ 任务与材料
     def create_task(self, request: str, *, by: Principal, matter_id: str | None = None, hints: dict | None = None, options: dict | None = None) -> TaskState:
-        self._require(by, Action.TASK_WRITE)
-        stamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S%f")[:-3]
-        task_id = f"T{stamp}"
         if matter_id:
             safe_id(matter_id, "事项标识")
-        st = TaskState(task_id=task_id, matter_id=matter_id or f"M{stamp}", created_by=by.id, options={"request": request, "hints": hints or {}, **(options or {})})
+        self._require(by, Action.TASK_WRITE, matter_id)
+        task_id, default_matter = self._new_ids()
+        request = strip_controls(request)
+        hints = {k: strip_controls(v) if isinstance(v, str) else v for k, v in (hints or {}).items()}
+        hook = self.rt.hooks.run("SessionStart", task_id, {"task_id": task_id, "matter_id": matter_id or default_matter})
+        if hook.blocked:
+            raise PermissionError(f"钩子阻断创建任务：{hook.reason}")
+        st = TaskState(task_id=task_id, matter_id=matter_id or default_matter, created_by=by.id, options={"request": request, "hints": hints, **(options or {})})
         st.history.append(StageRecord(stage=Stage.ADMISSION))
         self.save_state(st)
         log = self.log(task_id)
-        log.append("task.created", {"task_id": task_id, "matter_id": st.matter_id, "request": request, "hints": hints or {}}, actor=by.id, stage=st.stage.value)
-        self.rt.hooks.run("SessionStart", task_id, {"task_id": task_id})
+        log.append("task.created", {"task_id": task_id, "matter_id": st.matter_id, "request": request, "hints": hints}, actor=by.id, stage=st.stage.value)
         return st
 
+    @_serialized
     def add_material(self, task_id: str, filename: str, data: bytes, *, by: Principal, declared: Clearance | None = None, role: str = "material", authoritative: bool = False, description: str = "") -> AdmissionResult:
         st = self.load_state(task_id)
-        self._require(by, Action.MATERIAL_ADD, st.matter_id)
+        # 申报属性不得高于本人的材料访问级别（“未确认”交人工确认，“涉密”由准入扫描一律禁止进入）
+        self._require(by, Action.MATERIAL_ADD, st.matter_id, declared if declared not in (None, Clearance.UNKNOWN, Clearance.CLASSIFIED) else None)
         if authoritative and not by.is_human:
             raise PermissionError("只有人工通道可以把材料标记为权威来源")
         # 材料按事项存放：编号在事项内分配，同一事项的多个任务不会互相覆盖
@@ -132,7 +206,7 @@ class Engine:
         mat.admission = res.decision
         log = self.log(task_id)
         if res.decision == AdmissionDecision.FORBID:
-            self.rt.materials.purge(st.matter_id, mid)
+            self._purge_material(st.matter_id, mid)
             log.append("material.forbidden", {"material_id": mid, "filename": filename, "reasons": res.reasons, "findings": [f.code for f in res.findings]}, actor=by.id, stage=st.stage.value)
         else:
             self.rt.materials.save_meta(mat)
@@ -140,12 +214,16 @@ class Engine:
         items = AdmissionList.load(self.store, task_id)
         items.append(res)
         AdmissionList.save(self.store, task_id, items)
-        # 解析之后追加材料：派生产物失效，回到准入阶段重新判断（任务契约保留，但须重新确认提纲）
-        if st.stage not in (Stage.ADMISSION, Stage.NEED_MATERIAL, Stage.TASK_CONFIRM) and res.decision != AdmissionDecision.FORBID:
+        # 准入之后追加材料：派生产物失效，回到准入阶段重新判断（需人工确认的材料在此产生确认节点）；
+        # 已确认的任务契约保留（但须重新确认提纲），尚未确认的契约按新材料重新生成
+        if st.stage not in (Stage.ADMISSION, Stage.NEED_MATERIAL) and res.decision != AdmissionDecision.FORBID:
             st.options["materials_changed"] = True
+            names = ["source_bundle", "genre_decision", "policy_pack", "fact_ledger", "outline"]
+            if self._resolved(st, CheckpointKind.TASK_CONFIRM) is None:
+                names.append("task_spec")
             for cp in st.pending_checkpoints():
                 cp.status = "cancelled"
-            for name in ("source_bundle", "genre_decision", "policy_pack", "fact_ledger", "outline"):
+            for name in names:
                 st.artifacts.pop(name, None)
                 (self.store.task_dir(task_id) / "artifacts" / f"{name}.json").unlink(missing_ok=True)
             if st.stage not in TERMINAL:
@@ -157,17 +235,23 @@ class Engine:
         return [m for m in self.rt.materials.list(st.matter_id) if m.admission == AdmissionDecision.ALLOW]
 
     # ================================================================ 主循环
-    def advance(self, task_id: str, *, by: Principal | None = None, max_steps: int = 40, auto_accept: set[str] | None = None) -> TaskState:
+    @_serialized
+    def advance(self, task_id: str, *, by: Principal, max_steps: int = 40, auto_accept: set[str] | None = None) -> TaskState:
         st = self.load_state(task_id)
+        self._require(by, Action.TASK_WRITE, st.matter_id)
         log = self.log(task_id)
         auto = {cpk.AUTO_ACCEPT_KEYS[k] for k in (auto_accept or set()) if k in cpk.AUTO_ACCEPT_KEYS}
+        # 自动接受等同于处理审核节点：只有有权处理本事项审核节点的人工主体启动时才生效，否则节点留待人工处理
+        if not (by.is_human and self.rt.permissions.check(by, Action.CHECKPOINT_RESOLVE, st.matter_id).allowed):
+            auto = set()
+        guard = BudgetGuard(self.rt.config.budget, st.budget)  # 累计处理时长（等待人工处理的时间不计入）
         for _ in range(max_steps):
             if st.stage in TERMINAL:
                 break
             if st.pending_checkpoints():
                 handled = False
                 for cp in st.pending_checkpoints():
-                    if cp.kind in auto and cp.auto_acceptable and by is not None and by.is_human:
+                    if cp.kind in auto and cp.auto_acceptable:
                         self._resolve(st, log, cp, cpk.AUTO_ACCEPT_DEFAULTS[cp.kind], by, "无头模式按 --accept 参数自动接受（启动者已授权）", {})
                         handled = True
                         break
@@ -178,8 +262,11 @@ class Engine:
             if handler is None:
                 break
             try:
-                self.rt.hooks.run("StageEnter", st.stage.value, {"task_id": task_id})
-                nxt = handler(st, log)
+                guard.tick()
+                guard.check()
+                hook = self.rt.hooks.run("StageEnter", st.stage.value, {"task_id": task_id})
+                # 单位钩子阻断进入本阶段：不执行本阶段，显式失败（不能悄悄跳过单位规定）
+                nxt = self._fail(st, log, f"钩子阻断进入“{st.stage.value}”：{hook.reason}") if hook.blocked else handler(st, log)
             except BudgetExceeded as exc:
                 nxt = self._fail(st, log, f"预算超限：{exc}")
             except ModelRefused as exc:
@@ -193,17 +280,23 @@ class Engine:
                 self._transition(st, log, nxt)
             self.save_state(st)
             if nxt is None:
-                auto_ok = by is not None and by.is_human and any(cp.kind in auto and cp.auto_acceptable for cp in st.pending_checkpoints())
-                if not auto_ok:
+                if not any(cp.kind in auto and cp.auto_acceptable for cp in st.pending_checkpoints()):
                     break
+        guard.tick()
         self.save_state(st)
         return st
+
+    def _notify_hook(self, st: TaskState, log: SessionLog, event: str, subject: str, payload: dict[str, Any]) -> None:
+        """通知类钩子（阶段退出、审核节点产生）不改变流程（审核节点不能被钩子跳过），但阻断理由必须记入审计日志。"""
+        res = self.rt.hooks.run(event, subject, payload)
+        if res.blocked:
+            log.append("hook.blocked", {"event": event, "subject": subject, "reason": res.reason}, stage=st.stage.value)
 
     def _transition(self, st: TaskState, log: SessionLog, nxt: Stage, reason: str = "") -> None:
         if st.history:
             st.history[-1].exited_at = utcnow()
             st.history[-1].outcome = reason or f"→ {nxt.value}"
-        self.rt.hooks.run("StageExit", st.stage.value, {"task_id": st.task_id, "next": nxt.value})
+        self._notify_hook(st, log, "StageExit", st.stage.value, {"task_id": st.task_id, "next": nxt.value})
         log.append("stage.transition", {"from": st.stage.value, "to": nxt.value, "reason": reason}, stage=st.stage.value)
         st.previous_stage = st.stage
         st.stage = nxt
@@ -219,13 +312,13 @@ class Engine:
         cp = cpk.make(st.ids, kind, st.stage, question, details, payload)
         st.checkpoints.append(cp)
         log.append("checkpoint.requested", {"cp_id": cp.cp_id, "kind": kind.value, "question": question}, stage=st.stage.value)
-        self.rt.hooks.run("CheckpointRequested", kind.value, {"task_id": st.task_id, "cp_id": cp.cp_id})
+        self._notify_hook(st, log, "CheckpointRequested", kind.value, {"task_id": st.task_id, "cp_id": cp.cp_id})
         return cp
 
     def _resolved(self, st: TaskState, kind: CheckpointKind, stage: Stage | None = None) -> Checkpoint | None:
-        """最近一次同类审核节点已被处理时返回它（重新规划后产生的新节点必须重新确认）。"""
+        """最近一次同类审核节点已被处理时返回它；仍待处理或已作废时返回 None（不回退到更早的确认：重新规划后必须重新确认）。"""
         for cp in reversed(st.checkpoints):
-            if cp.kind == kind and (stage is None or cp.stage == stage) and cp.status != "cancelled":
+            if cp.kind == kind and (stage is None or cp.stage == stage):
                 return cp if cp.status == "resolved" else None
         return None
 
@@ -346,7 +439,8 @@ class Engine:
     def _h_outline_confirm(self, st: TaskState, log: SessionLog) -> Stage | None:
         sc = self.sc(st, log)
         outline = sc.load("outline", OutlinePlan)
-        if outline is None or st.options.pop("rebuild_outline", False):
+        rebuild = st.options.pop("rebuild_outline", False)  # 无论提纲是否存在都要清除，否则下一轮会再次重建、丢失人工修改
+        if outline is None or rebuild:
             spec = sc.load("task_spec", TaskSpec)
             genre = sc.load("genre_decision", GenreDecision)
             pack = sc.load("policy_pack", PolicyPack)
@@ -391,8 +485,14 @@ class Engine:
             st.doc_ids.append(doc_id)
         st.current_version = version
         st.options["review_round"] = 0
+        self._drop_proposals(st, sc, doc_id, version)
         log.append("draft.created", {"doc_id": doc_id, "version": version, "sha256": stable_hash(ir)}, stage=st.stage.value)
         return Stage.REVIEW
+
+    def _drop_proposals(self, st: TaskState, sc: SkillContext, doc_id: str, version: int) -> None:
+        """文稿已重新起草或经人工修改：此前针对旧稿的待确认修订建议作废（采纳时也会逐句核对原文）。"""
+        if self.store.has(st.task_id, "pending_proposals"):
+            sc.save("pending_proposals", PatchSet(doc_id=doc_id, round=0, from_version=version))
 
     def current_ir(self, st: TaskState) -> DocumentIR | None:
         if not st.doc_ids:
@@ -542,6 +642,7 @@ class Engine:
         self.store.write_json(st.task_id, "workbench_data.json", data)
         return pkg, data
 
+    @_serialized
     def workbench_data(self, task_id: str) -> dict[str, Any] | None:
         """审阅工作台数据（证据映射、问题、待确认项、版本差异）；尚未审校时返回 None。
 
@@ -579,6 +680,7 @@ class Engine:
         return build_page(self.current_ir(self.load_state(task_id)), data, api=api, token=token)
 
     # ================================================================ 人工审核节点
+    @_serialized
     def resolve_checkpoint(self, task_id: str, cp_id: str, option: str, *, by: Principal, note: str = "", data: dict[str, Any] | None = None) -> TaskState:
         st = self.load_state(task_id)
         if not by.is_human:
@@ -589,12 +691,46 @@ class Engine:
             raise KeyError(f"没有待处理的审核节点：{cp_id}")
         if option not in {o.key for o in cp.options}:
             raise ValueError(f"无效选项：{option}（可选：{'、'.join(o.key for o in cp.options)}）")
+        if data is not None and not isinstance(data, dict):
+            raise ValueError("data 须为 JSON 对象")
         log = self.log(task_id)
         self._resolve(st, log, cp, option, by, note, data or {})
         self.save_state(st)
         return st
 
+    def _validate_resolution(self, st: TaskState, cp: Checkpoint, option: str, by: Principal, data: dict[str, Any]) -> None:
+        """处理审核节点前校验权限与提交的数据；不通过时不改变任何状态，审计日志也不会记为已处理。"""
+        k = cp.kind
+        if k == CheckpointKind.MATERIAL_CONFIRM:
+            self._require(by, Action.ADMISSION_CONFIRM, st.matter_id)
+            if option == "confirm" and not cp.payload.get("aggregation"):
+                declared = data.get("materials")
+                pending = [m for m in cp.payload.get("materials", []) if isinstance(declared, dict) and m in declared]
+                if not pending:
+                    raise ValueError("按申报属性准入须在 data.materials 中为待确认材料申报属性（{材料ID: 属性}）；不准入请选择 reject")
+                for mid in pending:
+                    try:
+                        cl = Clearance(declared[mid])
+                    except ValueError:
+                        raise ValueError(f"材料 {mid} 的申报属性无效：{declared[mid]}（可选：{'、'.join(c.value for c in Clearance if c != Clearance.UNKNOWN)}）") from None
+                    if cl == Clearance.UNKNOWN:
+                        raise ValueError(f"材料 {mid} 须申报明确的属性")
+                    if cl != Clearance.CLASSIFIED:  # 涉密材料由准入扫描一律禁止进入，不涉及访问级别
+                        self._require(by, Action.ADMISSION_CONFIRM, st.matter_id, cl)
+        elif option == "edit" and k in (CheckpointKind.TASK_CONFIRM, CheckpointKind.AUTHORITY) and data.get("as_of"):
+            try:
+                date.fromisoformat(str(data["as_of"]))
+            except ValueError:
+                raise ValueError(f"as_of 须为 YYYY-MM-DD 格式的日期：{data['as_of']}") from None
+        elif option == "edit" and k == CheckpointKind.OUTLINE_CONFIRM:
+            items = data.get("add_facts", [])
+            if not isinstance(items, list) or not all(isinstance(i, dict) and i.get("statement") for i in items):
+                raise ValueError("add_facts 须为 [{statement, value, unit, kind}] 列表，且每项须有 statement")
+        elif option == "revise":
+            self._check_revision(st, data)
+
     def _resolve(self, st: TaskState, log: SessionLog, cp: Checkpoint, option: str, by: Principal, note: str, data: dict[str, Any]) -> None:
+        self._validate_resolution(st, cp, option, by, data)
         cp.status = "resolved"
         cp.resolution = {"option": option, "note": note, "data": data}
         cp.resolved_by = by.id
@@ -695,9 +831,19 @@ class Engine:
                 if proposals and proposals.patches:
                     ir = self.current_ir(st)
                     skill = self.rt.skills.get("gongwen-targeted-revision")
+                    stale = []
                     for p in proposals.patches:
-                        p.status = "proposed"
                         p.author = f"human-approved:{by.id}"
+                        # 建议针对的句子已被修改（如人工改写）：建议已过时，不得覆盖现有文字
+                        found = ir.find_sentence(p.target) if p.op in ("replace", "delete") and p.before else None
+                        if found is not None and found[1].text != p.before:
+                            p.status = "rejected"
+                            stale.append(p.patch_id)
+                        else:
+                            p.status = "proposed"
+                    if stale:
+                        st.errors.append(f"修改建议 {'、'.join(stale)} 针对的句子已被修改，建议已过时，未予应用")
+                        log.append("proposal.stale", {"patch_ids": stale}, actor=by.id, stage=st.stage.value)
                     new = skill.apply(sc, ir, proposals)
                     new.meta.update({"created_at": utcnow().isoformat(), "author": by.id, "summary": "采纳人工确认的修订建议"})
                     self.store.save_version(st.task_id, new.doc_id, new.version, new)
@@ -723,22 +869,32 @@ class Engine:
 
     def _resolve_material(self, st: TaskState, log: SessionLog, cp: Checkpoint, option: str, by: Principal, data: dict) -> None:
         if cp.payload.get("aggregation"):
+            if option == "reject":
+                # 人工判定汇聚风险不可接受：不确认风险，整个任务禁止进入当前环境（不能继续带着全部材料处理）
+                st.options.pop("aggregation_ack", None)
+                reason = f"人工判定多份材料汇聚后的敏感度风险不可接受，不予处理（{by.id}）"
+                st.errors.append(reason)
+                st.exception_reason = reason
+                log.append("material.aggregation_rejected", {"reason": reason}, actor=by.id, stage=st.stage.value)
+                self._transition(st, log, Stage.BLOCKED, reason)
+                return
             st.options["aggregation_ack"] = by.id
             return
         items = AdmissionList.load(self.store, st.task_id)
-        declared = data.get("materials", {})
+        declared = data.get("materials") or {}
         for a in items:
             if a.material_id not in cp.payload.get("materials", []):
                 continue
-            if option == "reject" or a.material_id not in declared:
-                if option == "reject" or not declared:
-                    a.decision = AdmissionDecision.FORBID
-                    a.reasons.append(f"人工不予准入（{by.id}）")
-                    try:
-                        self.rt.materials.purge(st.matter_id, a.material_id)
-                    except FileNotFoundError:
-                        pass
+            if option == "reject":
+                a.decision = AdmissionDecision.FORBID
+                a.reasons.append(f"人工不予准入（{by.id}）")
+                try:
+                    self._purge_material(st.matter_id, a.material_id)
+                except FileNotFoundError:
+                    pass
                 continue
+            if a.material_id not in declared:
+                continue  # 未申报属性的材料仍待人工确认
             cl = Clearance(declared[a.material_id])
             mat = self.rt.materials.get(st.matter_id, a.material_id)
             data_bytes = self.rt.materials.read_bytes(mat)
@@ -746,7 +902,7 @@ class Engine:
             if res.decision == AdmissionDecision.FORBID:
                 a.decision = AdmissionDecision.FORBID
                 a.reasons = res.reasons
-                self.rt.materials.purge(st.matter_id, a.material_id)
+                self._purge_material(st.matter_id, a.material_id)
             else:
                 # 人工确认：申报属性，并确认隐藏内容、个人信息可以按最小必要原则处理
                 a.decision = AdmissionDecision.ALLOW
@@ -794,18 +950,44 @@ class Engine:
                 g.ask_user = False
 
     # ================================================================ 修订请求（人工发起）
+    @_serialized
     def request_revision(self, task_id: str, *, by: Principal, instruction: str | None = None, edits: list[dict] | None = None, fact_changes: list[dict] | None = None) -> TaskState:
         st = self.load_state(task_id)
         if not by.is_human:
             raise PermissionError("修订请求须由人发起")
         self._require(by, Action.IR_PATCH, st.matter_id)
+        data = {"instruction": instruction, "edits": edits or [], "fact_changes": fact_changes or []}
+        self._check_revision(st, data)
         log = self.log(task_id)
         for cp in st.pending_checkpoints():
-            if cp.kind in (CheckpointKind.HUMAN_REVIEW, CheckpointKind.REVIEW_ESCALATION):
+            if cp.kind in REDRAFT_CHECKPOINTS:
                 cp.status = "cancelled"
-        self._revise(st, log, by, {"instruction": instruction, "edits": edits or [], "fact_changes": fact_changes or []})
+        self._revise(st, log, by, data)
         self.save_state(st)
         return st
+
+    def _check_revision(self, st: TaskState, data: dict) -> None:
+        """人工修订的前置校验（在改变任何状态之前）：只能修订已形成文稿、处于审校至送审各阶段的任务，修改内容须格式正确。"""
+        ir = self.current_ir(st)
+        if st.stage not in REVISABLE or ir is None:
+            raise ValueError(f"任务处于“{st.stage.value}”，没有可修订的文稿（须在审校至送审各阶段、形成文稿后发起修订）")
+        if data.get("instruction") is not None and not isinstance(data["instruction"], str):
+            raise ValueError("instruction 须为文本")
+        edits = data.get("edits") or []
+        if not isinstance(edits, list) or not all(isinstance(e, dict) and isinstance(e.get("sid"), str) and isinstance(e.get("text"), str) for e in edits):
+            raise ValueError("edits 须为 [{sid, text}] 列表")
+        missing = [e["sid"] for e in edits if ir.find_sentence(e["sid"]) is None]
+        if missing:
+            raise KeyError(f"句子不存在：{'、'.join(missing)}")
+        changes = data.get("fact_changes") or []
+        if not isinstance(changes, list) or not all(isinstance(fc, (dict, FactChange)) for fc in changes):
+            raise ValueError("fact_changes 须为 [{fact_id, new_value, reason}] 列表")
+        if changes:
+            ledger = self.load_matter_ledger(st)
+            for fc in changes:
+                change = fc if isinstance(fc, FactChange) else FactChange(**{**fc, "by": "-"})  # 字段校验（ValidationError 属于 ValueError）
+                if ledger is None or ledger.get(change.fact_id) is None:
+                    raise KeyError(f"事实不存在：{change.fact_id}")
 
     def _revise(self, st: TaskState, log: SessionLog, by: Principal, data: dict) -> None:
         sc = self.sc(st, log)
@@ -819,7 +1001,8 @@ class Engine:
         all_olds: dict = {}
         reasons: list[str] = []
         for fc in data.get("fact_changes") or []:
-            change = fc if isinstance(fc, FactChange) else FactChange(**fc, by=by.id) if "by" not in fc else FactChange(**fc)
+            # 核实人一律记为实际发起修订的人，不采信调用方提交的 by
+            change = fc.model_copy(update={"by": by.id}) if isinstance(fc, FactChange) else FactChange(**{**fc, "by": by.id})
             olds = skill.apply_fact_change(ledger, change)
             f = ledger.get(change.fact_id)
             reason = f"关键事实变更：{f.attribute} {olds['__before__']} → {f.display_value()}（{change.reason or '人工变更'}）"
@@ -857,6 +1040,7 @@ class Engine:
         self.store.save_version(st.task_id, new.doc_id, new.version, new)
         st.current_version = new.version
         sc.save(f"human_patch_{rnd}", combined)
+        self._drop_proposals(st, sc, new.doc_id, new.version)
         if was_approved:
             st.approvals = [a for a in st.approvals if a.doc_id != ir.doc_id]
             st.errors.append("已审批版本发生修改：须报原签批人复审（条例第二十五条（一））")
@@ -894,6 +1078,14 @@ class Engine:
                 continue
             olog = self.log(other.task_id)
             osc = self.sc(other, olog)
+            if other.stage not in REVISABLE:
+                # 尚未（重新）起草的文稿：不改旧稿、不作废其待处理的审核节点（权限、材料准入等节点不能被其他任务的修改绕过），
+                # 起草时直接使用事项账本中的新值
+                if other.artifacts.get("fact_ledger"):
+                    osc.save("fact_ledger", ledger)
+                    self.save_state(other)
+                olog.append("matter.fact_changed", {"from_task": st.task_id, "facts": sorted(changed), "patches": 0, "redraft": True}, actor=by.id)
+                continue
             rnd = len([a for a in other.artifacts if a.startswith("human_patch_")]) + 1
             ps = skill.propagate_values(osc, oir, ledger, olds, f"同一事项其他文稿（{st.task_id}）{reason}", rnd)
             new = skill.apply(osc, oir, ps) if ps.patches else deepcopy(oir)
@@ -913,23 +1105,27 @@ class Engine:
                 other.errors.append("已审批版本因关键事实变更而修改：须报原签批人复审（条例第二十五条（一））")
                 olog.append("approval.invalidated", {"doc_id": oir.doc_id, "from_version": oir.version, "cause": st.task_id}, actor=by.id)
             for cp in other.pending_checkpoints():
-                cp.status = "cancelled"
+                if cp.kind in REDRAFT_CHECKPOINTS:
+                    cp.status = "cancelled"
+            self._drop_proposals(other, osc, new.doc_id, new.version)
             olog.append("matter.fact_changed", {"from_task": st.task_id, "facts": sorted(changed), "patches": len(ps.patches)}, actor=by.id)
-            if other.stage not in (Stage.ADMISSION, Stage.TASK_CONFIRM, Stage.PARSING, Stage.EVIDENCE, Stage.OUTLINE_CONFIRM, Stage.DRAFTING):
-                other.options["review_round"] = 0
-                other.options["revision_round"] = 0
-                other.budget.revision_rounds = 0
-                self._transition(other, olog, Stage.REVIEW, f"同一事项关键事实变更（来自 {st.task_id}）")
+            other.options["review_round"] = 0
+            other.options["revision_round"] = 0
+            other.budget.revision_rounds = 0
+            self._transition(other, olog, Stage.REVIEW, f"同一事项关键事实变更（来自 {st.task_id}）")
             self.save_state(other)
             affected.append(oir.doc_id)
         return affected
 
     # ================================================================ 修改建议（模型通道提交，人工采纳）
+    @_serialized
     def propose_revision(self, task_id: str, *, by: Principal, instruction: str, reason: str = "") -> dict[str, Any]:
         """模型通道（对话代理、MCP 客户端）只能“提交修改建议”，不直接改稿；须由人工采纳后才进入定向修订。"""
         st = self.load_state(task_id)
         self._require(by, Action.PROPOSAL_SUBMIT, st.matter_id)
-        instruction = (instruction or "").strip()
+        # 去除控制字符：不能借回车、终端转义序列让人看到的建议与实际采纳的内容不一致
+        instruction = strip_controls(instruction or "").strip()
+        reason = strip_controls(reason or "")
         if not instruction:
             raise ValueError("修改建议不能为空")
         if self.current_ir(st) is None:
@@ -959,6 +1155,7 @@ class Engine:
         st = self.load_state(task_id)
         return [p for p in st.options.get("proposals", []) if status is None or p.get("status") == status]
 
+    @_serialized
     def apply_proposal(self, task_id: str, proposal_id: str, *, by: Principal) -> TaskState:
         st = self.load_state(task_id)
         if not by.is_human:
@@ -966,15 +1163,20 @@ class Engine:
         item = next((p for p in st.options.get("proposals", []) if p["proposal_id"] == proposal_id), None)
         if item is None or item.get("status") != "pending":
             raise KeyError(f"没有待采纳的修改建议：{proposal_id}")
+        # 先按建议修订（其中校验修订权限、事项范围与阶段），成功后才记为已采纳；被拒绝时建议仍待处理
+        st = self.request_revision(task_id, by=by, instruction=item["instruction"])
+        item = next(p for p in st.options.get("proposals", []) if p["proposal_id"] == proposal_id)
         item.update({"status": "applied", "decided_by": by.id, "decided_at": utcnow().isoformat()})
         self.log(task_id).append("proposal.applied", {"proposal_id": proposal_id}, actor=by.id, stage=st.stage.value)
         self.save_state(st)
-        return self.request_revision(task_id, by=by, instruction=item["instruction"])
+        return st
 
+    @_serialized
     def reject_proposal(self, task_id: str, proposal_id: str, *, by: Principal, note: str = "") -> TaskState:
         st = self.load_state(task_id)
         if not by.is_human:
             raise PermissionError("修改建议须由人工处理")
+        self._require(by, Action.IR_PATCH, st.matter_id)  # 与采纳同权：有权修订本事项文稿的人才能决定建议的取舍
         item = next((p for p in st.options.get("proposals", []) if p["proposal_id"] == proposal_id), None)
         if item is None or item.get("status") != "pending":
             raise KeyError(f"没有待处理的修改建议：{proposal_id}")
@@ -984,6 +1186,7 @@ class Engine:
         return st
 
     # ================================================================ 审批记录绑定
+    @_serialized
     def import_approval(self, task_id: str, *, by: Principal, approver: str, approved_at: str, scope: str, source: str, approver_title: str = "") -> TaskState:
         st = self.load_state(task_id)
         if not by.is_human:

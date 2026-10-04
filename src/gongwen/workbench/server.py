@@ -126,25 +126,37 @@ def make_handler(engine: Engine, user: Principal, token: str):
         def do_POST(self):  # noqa: N802
             if not self._host_ok() or not secrets.compare_digest(self.headers.get("X-GW-Token", ""), token):
                 return self._json(HTTPStatus.FORBIDDEN, {"message": "令牌无效或来源不受信任"})
-            length = int(self.headers.get("Content-Length") or 0)
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+            except ValueError:
+                return self._json(400, {"message": "Content-Length 无效"})
+            if length < 0:
+                return self._json(400, {"message": "Content-Length 无效"})
             if length > 1_000_000:
                 return self._json(413, {"message": "请求过大"})
             try:
                 body = json.loads(self.rfile.read(length) or b"{}")
-            except json.JSONDecodeError:
+            except ValueError:  # 含 JSONDecodeError 与非 UTF-8 内容
                 return self._json(400, {"message": "请求体不是有效 JSON"})
+            if not isinstance(body, dict):
+                return self._json(400, {"message": "请求体须为 JSON 对象"})
             path = urlparse(self.path).path
             try:
                 if path == "/api/checkpoint":
-                    engine.resolve_checkpoint(body["task_id"], body["cp_id"], body["option"], by=user, note=body.get("note", ""), data=body.get("data") or {})
+                    note = body.get("note") or ""
+                    if not isinstance(note, str):
+                        raise ValueError("note 须为文本")
+                    engine.resolve_checkpoint(body["task_id"], body["cp_id"], body["option"], by=user, note=note, data=body.get("data") or {})
                     st = engine.advance(body["task_id"], by=user)
                     return self._json(200, {"message": f"已处理，当前阶段：{st.stage.value}", "stage": st.stage.value})
                 if path == "/api/revise":
                     engine.request_revision(body["task_id"], by=user, instruction=body.get("instruction"), edits=body.get("edits"), fact_changes=body.get("fact_changes"))
                     st = engine.advance(body["task_id"], by=user)
                     return self._json(200, {"message": f"已提交修订，当前阶段：{st.stage.value}", "stage": st.stage.value})
-            except (KeyError, ValueError, PermissionError) as exc:
+            except (KeyError, ValueError, TypeError, PermissionError) as exc:
                 return self._json(400, {"message": f"处理失败：{exc}"})
+            except Exception as exc:  # 失败必须可见：返回错误说明，而不是断开连接
+                return self._json(500, {"message": f"处理失败：{type(exc).__name__}: {exc}"})
             return self._json(404, {"message": "not found"})
 
     return Handler

@@ -39,8 +39,9 @@ class HookRunner:
         outputs: list[str] = []
         # 进程内钩子
         if self.ctx is not None:
-            r = self.ctx.bail(f"hook/{event}", subject, payload)
-            if isinstance(r, str) and r:
+            # 只有非空字符串（阻断理由）才中断：前面的监听者返回 False 等放行值时，后面监听者的阻断仍然生效
+            r = self.ctx.bail_if(lambda x: isinstance(x, str) and bool(x), f"hook/{event}", subject, payload)
+            if r:
                 return HookResult(True, r, outputs)
         for spec in self._specs(event):
             if not fnmatch.fnmatch(subject, spec.matcher):

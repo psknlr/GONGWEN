@@ -138,7 +138,8 @@ def build_page(ir: DocumentIR, data: dict[str, Any], api: str | None = None, tok
     data = dict(data)
     data["api"] = api
     data["token"] = token
-    payload = json.dumps(data, ensure_ascii=False, default=str).replace("</", "<\\/")
+    # 嵌入 <script> 的数据中转义 < > &：材料文字中的 "<!--<script>" 等不能改变 HTML 解析状态、吞掉页面脚本
+    payload = json.dumps(data, ensure_ascii=False, default=str).replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
     status_cls = {"讨论稿": "discussion", "送审稿": "submission", "经批准的待印发版本": "approved"}.get(ir.status.value, "discussion")
     counts = data.get("counts", {})
     return f"""<!doctype html>
