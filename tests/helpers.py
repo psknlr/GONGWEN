@@ -73,3 +73,44 @@ def make_xlsx(rows: list[list], sheet: str = "经费测算", hidden_sheet: list[
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
+
+
+def make_numbered_docx(items: list[tuple[int, str]], plain_before: list[str] | None = None, plain_after: list[str] | None = None) -> bytes:
+    """Word 自动编号的文稿：items 为 (层级, 文字)，层级 0～3 分别编为“一、”“（一）”“1.”“（1）”，序号不在段落文字中。"""
+    d = docx.Document()
+    numbering = d.part.numbering_part.element
+    absn = OxmlElement("w:abstractNum")
+    absn.set(qn("w:abstractNumId"), "90")
+    for ilvl, (fmt, text) in enumerate((("chineseCounting", "%1、"), ("chineseCounting", "（%2）"), ("decimal", "%3."), ("decimal", "（%4）"))):
+        lvl = OxmlElement("w:lvl")
+        lvl.set(qn("w:ilvl"), str(ilvl))
+        for tag, val in (("w:start", "1"), ("w:numFmt", fmt), ("w:lvlText", text)):
+            e = OxmlElement(tag)
+            e.set(qn("w:val"), val)
+            lvl.append(e)
+        absn.append(lvl)
+    numbering.insert(0, absn)
+    num = OxmlElement("w:num")
+    num.set(qn("w:numId"), "90")
+    ref = OxmlElement("w:abstractNumId")
+    ref.set(qn("w:val"), "90")
+    num.append(ref)
+    numbering.append(num)
+    for t in plain_before or []:
+        d.add_paragraph(t)
+    for level, text in items:
+        p = d.add_paragraph(text)
+        ppr = p._p.get_or_add_pPr()
+        numpr = OxmlElement("w:numPr")
+        il = OxmlElement("w:ilvl")
+        il.set(qn("w:val"), str(level))
+        ni = OxmlElement("w:numId")
+        ni.set(qn("w:val"), "90")
+        numpr.append(il)
+        numpr.append(ni)
+        ppr.append(numpr)
+    for t in plain_after or []:
+        d.add_paragraph(t)
+    buf = io.BytesIO()
+    d.save(buf)
+    return buf.getvalue()

@@ -52,6 +52,122 @@ def _para_text(p: ET.Element) -> tuple[str, str, bool, bool]:
     return "".join(visible).strip(), "".join(hidden).strip(), has_ins, has_del
 
 
+_CN = "零一二三四五六七八九十"
+_CIRCLED = "①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳"
+
+
+def _cn_number(n: int) -> str:
+    if n <= 10:
+        return "十" if n == 10 else _CN[n]
+    tens, ones = divmod(n, 10)
+    return ("" if tens == 1 else _CN[tens]) + "十" + (_CN[ones] if ones else "")
+
+
+def _roman(n: int) -> str:
+    out = ""
+    for v, r in ((1000, "M"), (900, "CM"), (500, "D"), (400, "CD"), (100, "C"), (90, "XC"), (50, "L"), (40, "XL"), (10, "X"), (9, "IX"), (5, "V"), (4, "IV"), (1, "I")):
+        while n >= v:
+            out, n = out + r, n - v
+    return out
+
+
+def _format_number(n: int, fmt: str) -> str:
+    if fmt in ("decimal", "decimalHalfWidth", "decimalFullWidth", ""):
+        return str(n)
+    if fmt == "decimalZero":
+        return f"{n:02d}"
+    if fmt.startswith("chinese") or fmt in ("ideographTraditional", "ideographDigital", "japaneseCounting", "taiwaneseCounting", "koreanCounting"):
+        return _cn_number(n)
+    if fmt.startswith("decimalEnclosedCircle"):
+        return _CIRCLED[n - 1] if 0 < n <= len(_CIRCLED) else str(n)
+    if fmt == "upperLetter":
+        return chr(64 + (n - 1) % 26 + 1)
+    if fmt == "lowerLetter":
+        return chr(96 + (n - 1) % 26 + 1)
+    if fmt == "upperRoman":
+        return _roman(n)
+    if fmt == "lowerRoman":
+        return _roman(n).lower()
+    return str(n)
+
+
+class _Numbering:
+    """Word 自动编号：段落文本中没有“一、”“（一）”等序号，须按 numbering.xml 还原，
+    否则层次结构与层次序数检查都会失真。编号计数按抽象列表连续，startOverride 时重新起算。"""
+
+    def __init__(self, zf: zipfile.ZipFile, names: set[str]):
+        self.levels: dict[str, dict[int, tuple[str, str, int]]] = {}
+        self.nums: dict[str, tuple[str, dict[int, int]]] = {}
+        self.style_num: dict[str, tuple[str, int]] = {}
+        self.counters: dict[str, list[int | None]] = {}
+        self.started: set[str] = set()
+        if "word/numbering.xml" in names:
+            root = ET.fromstring(zf.read("word/numbering.xml"))
+            for a in root.findall("w:abstractNum", NS):
+                aid = a.get(_q("w:abstractNumId"), "")
+                lv = {}
+                for l in a.findall("w:lvl", NS):
+                    ilvl = int(l.get(_q("w:ilvl"), "0"))
+                    fmt = l.find("w:numFmt", NS)
+                    txt = l.find("w:lvlText", NS)
+                    start = l.find("w:start", NS)
+                    lv[ilvl] = (fmt.get(_q("w:val"), "decimal") if fmt is not None else "decimal", txt.get(_q("w:val"), "") if txt is not None else "", int(start.get(_q("w:val"), "1")) if start is not None else 1)
+                self.levels[aid] = lv
+            for n in root.findall("w:num", NS):
+                nid = n.get(_q("w:numId"), "")
+                aref = n.find("w:abstractNumId", NS)
+                overrides = {}
+                for o in n.findall("w:lvlOverride", NS):
+                    so = o.find("w:startOverride", NS)
+                    if so is not None:
+                        overrides[int(o.get(_q("w:ilvl"), "0"))] = int(so.get(_q("w:val"), "1"))
+                self.nums[nid] = (aref.get(_q("w:val"), "") if aref is not None else "", overrides)
+        if "word/styles.xml" in names:
+            sroot = ET.fromstring(zf.read("word/styles.xml"))
+            for st in sroot.findall("w:style", NS):
+                np_ = st.find("w:pPr/w:numPr", NS)
+                if np_ is not None:
+                    nid = np_.find("w:numId", NS)
+                    il = np_.find("w:ilvl", NS)
+                    if nid is not None:
+                        self.style_num[st.get(_q("w:styleId"), "")] = (nid.get(_q("w:val"), ""), int(il.get(_q("w:val"), "0")) if il is not None else 0)
+
+    def label(self, p: ET.Element, style_val: str) -> str:
+        np_ = p.find("w:pPr/w:numPr", NS)
+        num_id, ilvl = None, 0
+        if np_ is not None:
+            nid = np_.find("w:numId", NS)
+            il = np_.find("w:ilvl", NS)
+            num_id = nid.get(_q("w:val"), "") if nid is not None else None
+            ilvl = int(il.get(_q("w:val"), "0")) if il is not None else 0
+        if num_id is None and style_val in self.style_num:
+            num_id, ilvl = self.style_num[style_val]
+        if not num_id or num_id == "0" or num_id not in self.nums:
+            return ""
+        aid, overrides = self.nums[num_id]
+        lv = self.levels.get(aid, {})
+        if ilvl not in lv:
+            return ""
+        counters = self.counters.setdefault(aid, [None] * 9)
+        if num_id not in self.started:
+            self.started.add(num_id)
+            for k, v in overrides.items():
+                if k < 9:
+                    counters[k] = v - 1
+        fmt, text, start = lv[ilvl]
+        counters[ilvl] = start if counters[ilvl] is None else counters[ilvl] + 1
+        for k in range(ilvl + 1, 9):
+            counters[k] = None
+        if fmt in ("bullet", "none"):
+            return ""
+        out = text
+        for k in range(9):
+            if f"%{k + 1}" in out:
+                kfmt, _, kstart = lv.get(k, ("decimal", "", 1))
+                out = out.replace(f"%{k + 1}", _format_number(counters[k] if counters[k] is not None else kstart, kfmt))
+        return out
+
+
 def _deleted_text(root: ET.Element) -> list[str]:
     out = []
     for d in root.iter(_q("w:del")):
@@ -79,6 +195,7 @@ def parse_docx(material_id: str, data: bytes) -> ParseResult:
         res.warnings.append("文件不是有效的 DOCX（ZIP）结构")
         return res
     names = set(zf.namelist())
+    numbering = _Numbering(zf, names)
     root = ET.fromstring(zf.read("word/document.xml"))
     body = root.find("w:body", NS)
     para_no, table_no = 0, 0
@@ -97,6 +214,9 @@ def parse_docx(material_id: str, data: bytes) -> ParseResult:
             para_no += 1
             style = el.find("w:pPr/w:pStyle", NS)
             style_val = style.get(_q("w:val"), "") if style is not None else ""
+            label = numbering.label(el, style_val)
+            if label and not text.startswith(label):
+                text = label + text  # 自动编号还原为文字序号
             kind = "heading" if style_val.lower().startswith(("heading", "title")) or style_val.isdigit() else classify_line(text)
             u = b.add(kind, text, f"p{para_no}", style=style_val)
             if NOTE_RE.match(text) and last_table:

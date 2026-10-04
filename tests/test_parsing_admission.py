@@ -94,3 +94,23 @@ def test_policy_mention_of_secret_law_is_not_classified():
     res = parse_bytes("M-008", "x.txt", "根据《中华人民共和国保守国家秘密法》，不得泄露国家秘密。".encode())
     r = scan(ScanInput("M-008", "x.txt", res, Clearance.PUBLIC), EnvironmentRoute.PUBLIC_DEV)
     assert r.decision == AdmissionDecision.ALLOW
+
+
+def test_word_automatic_numbering_is_restored_as_text():
+    """Word 自动编号的序号不在段落文字中：解析时按 numbering.xml 还原，层次检查才不失真。"""
+    from helpers import make_numbered_docx
+
+    from gongwen.importer import check_external, ir_from_file
+    from gongwen.parsing import parse_bytes
+
+    data = make_numbered_docx(
+        [(0, "总体要求"), (1, "工作目标"), (2, "2026年新建示范点12个。"), (1, "工作原则"), (0, "主要任务"), (1, "完成选址"), (3, "跳级的四级序数。")],
+        plain_before=["示例市卫生健康委员会关于做好示范点建设工作的通知", "各区卫生健康局："],
+        plain_after=["示例市卫生健康委员会", "2026年3月1日"],
+    )
+    texts = [u.text for u in parse_bytes("M", "通知.docx", data).units]
+    assert "一、总体要求" in texts and "（一）工作目标" in texts and "1.2026年新建示范点12个。" in texts
+    assert "（二）工作原则" in texts and "二、主要任务" in texts and "（一）完成选址" in texts  # 上级序号变化时下级重新起算
+    ir = ir_from_file("通知.docx", data)
+    rules = {i.rule.rule_id for i in check_external(ir).issues if i.rule}
+    assert "GW-STRUCT-001" in rules  # “（一）”之下直接用“（1）”跳级
