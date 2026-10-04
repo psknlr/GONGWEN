@@ -502,7 +502,11 @@ def cmd_chat(args) -> int:
         if not ok:
             print(desc)
             continue
-        reply = session.send(line)
+        try:
+            reply = session.send(line)
+        except Exception as exc:  # 模型通道出错不能结束对话：报告后继续（斜杠命令仍可用）
+            print(visible(f"对话出错（{type(exc).__name__}）：{exc}\n可重试，或改用斜杠命令继续办理（/help）。"))
+            continue
         print(visible(reply.text))  # 模型输出：控制字符显示为可见转义
 
 
@@ -979,8 +983,13 @@ def main(argv: list[str] | None = None) -> int:
     if not getattr(args, "func", None):
         ap.print_help()
         return EXIT_OK
+    from ..llm.base import ModelCallFailed
+
     try:
         return int(args.func(args) or 0)
+    except ModelCallFailed as exc:  # 模型接口故障（已按配置重试）：说明原因，不打印堆栈
+        print(f"错误：{exc}", file=sys.stderr)
+        return EXIT_FAIL
     except (KeyError, ValueError, PermissionError, FileNotFoundError) as exc:
         msg = exc.args[0] if isinstance(exc, KeyError) and exc.args else exc
         print(f"错误：{msg}", file=sys.stderr)

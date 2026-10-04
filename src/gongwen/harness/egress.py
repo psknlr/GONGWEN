@@ -22,6 +22,14 @@ class EgressDenied(PermissionError):
     pass
 
 
+LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+
+
+def is_local_host(host: str | None) -> bool:
+    """本机回环地址无需列入白名单。“*.local”是局域网 mDNS 主机（其他机器），不属于本机，须列入白名单。"""
+    return (host or "").lower() in LOCAL_HOSTS
+
+
 @dataclass
 class EgressRequest:
     url: str
@@ -51,10 +59,6 @@ class EgressGateway:
         self.block_all = block_all
         self.audit = audit  # callable(type, payload)
 
-    @staticmethod
-    def _is_local(host: str) -> bool:
-        return host in {"localhost", "127.0.0.1", "::1"} or host.endswith(".local")
-
     def evaluate(self, req: EgressRequest) -> EgressVerdict:
         host = (urlparse(req.url).hostname or "").lower()
         top = max(req.clearances, key=lambda c: c.rank, default=Clearance.PUBLIC)
@@ -74,7 +78,7 @@ class EgressGateway:
                 f"目标模型仅获准处理“{req.model_max_clearance.value}”及以下材料，本次包含“{top.value}”材料",
                 host,
             )
-        if not self._is_local(host) and host not in self.allowed_hosts:
+        if not is_local_host(host) and host not in self.allowed_hosts:
             return EgressVerdict(False, f"主机 {host or '(空)'} 不在出网白名单内", host)
         return EgressVerdict(True, "ok", host)
 

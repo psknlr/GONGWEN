@@ -22,7 +22,8 @@ class ModelConfig(GWModel):
         default=Clearance.PUBLIC,
         description="允许发送给该模型的最高材料属性。公共云模型默认仅限公开材料。",
     )
-    timeout: float = 90.0
+    timeout: float = Field(default=90.0, description="单次请求超时（秒）；Claude 适配使用流式，按两次数据之间的间隔计")
+    max_retries: int = Field(default=2, ge=0, description="限流、服务端错误、连接失败与超时的自动重试次数；重试后仍失败则显式报错")
     temperature: float = 0.2
     max_tokens: int = 4096
     extra_headers: dict[str, str] = Field(default_factory=dict)

@@ -5,7 +5,8 @@
 2. 出网网关：按环境路线、材料属性与模型获准级别判定，默认拒绝；
 3. 预算：调用次数与令牌上限；
 4. 审计：只记录提示模板编号、对象编号与内容哈希（可重建、但不复制材料）；
-5. 拒答：模型拒答时显式抛出，不把空结果当成功。
+5. 拒答：模型拒答时显式抛出，不把空结果当成功；
+6. 故障：网络、超时、HTTP 错误与报文异常统一为 ModelCallFailed 并写入审计，不悄悄降级。
 """
 
 from __future__ import annotations
@@ -17,7 +18,7 @@ from ..harness.budget import BudgetExceeded, BudgetGuard
 from ..harness.egress import EgressDenied, EgressGateway, EgressRequest
 from ..kernel.config import GongwenConfig, ModelConfig
 from ..schemas.common import Clearance, sha256_text
-from .base import ChatMessage, ModelProvider, ModelRefused, ModelResponse, ModelUnavailable, ToolDef
+from .base import ChatMessage, ModelCallFailed, ModelProvider, ModelRefused, ModelResponse, ModelUnavailable, ToolDef
 
 ROLES = ("light", "heavy", "reviewer", "agent")
 
@@ -35,6 +36,7 @@ def build_provider(mc: ModelConfig) -> ModelProvider | None:
             max_clearance=mc.max_clearance,
             timeout=mc.timeout,
             max_tokens=max(mc.max_tokens, 16000),
+            max_retries=mc.max_retries,
         )
     from .openai_compat import OpenAICompatProvider
 
@@ -48,6 +50,7 @@ def build_provider(mc: ModelConfig) -> ModelProvider | None:
         temperature=mc.temperature,
         max_tokens=mc.max_tokens,
         extra_headers=mc.extra_headers,
+        max_retries=mc.max_retries,
     )
 
 
@@ -59,6 +62,7 @@ class ModelRouter:
         budget: BudgetGuard | None = None,
         audit: Callable[..., Any] | None = None,
         providers: dict[str, ModelProvider | None] | None = None,
+        cache: dict[str, ModelProvider] | None = None,
     ):
         self.config = config
         self.egress = egress
@@ -66,6 +70,8 @@ class ModelRouter:
         self.audit = audit or (lambda *a, **k: None)
         self._providers: dict[str, ModelProvider | None] = dict(providers or {})
         self._errors: dict[str, str] = {}
+        # 运行时共享的已建适配（按模型配置区分）：每个阶段都会新建网关，不能每次都新建 HTTP 客户端与连接
+        self._cache = cache if cache is not None else {}
 
     # ------------------------------------------------------------------
     def _model_config(self, role: str) -> ModelConfig:
@@ -78,11 +84,16 @@ class ModelRouter:
         if "*" in self._providers:
             return self._providers["*"]
         mc = self._model_config(role)
-        try:
-            p = build_provider(mc)
-        except ValueError as exc:
-            self._errors[role] = str(exc)
-            p = None
+        key = mc.model_dump_json()
+        p = self._cache.get(key)
+        if p is None:
+            try:
+                p = build_provider(mc)
+            except ValueError as exc:
+                self._errors[role] = str(exc)
+                p = None
+            if p is not None:
+                self._cache[key] = p
         self._providers[role] = p
         return p
 
@@ -150,9 +161,16 @@ class ModelRouter:
                 "max_clearance": max(clearances, key=lambda c: c.rank).value,
             },
         )
-        resp = p.complete(messages, system=system, tools=tools, json_schema=json_schema, max_tokens=max_tokens)
-        if self.budget:
-            self.budget.charge_model_call(resp.usage.input_tokens, resp.usage.output_tokens)
+        try:
+            resp = p.complete(messages, system=system, tools=tools, json_schema=json_schema, max_tokens=max_tokens)
+        except (ModelRefused, ModelUnavailable):
+            raise
+        except Exception as exc:  # 网络、超时、HTTP 错误、报文异常：显式失败并留痕，不当作“未配置模型”
+            detail = str(exc) if isinstance(exc, ModelCallFailed) else f"{type(exc).__name__}: {exc}"
+            err = ModelCallFailed(f"{p.name} 模型接口调用失败：{detail[:300]}")
+            self.audit("model.error", {"role": role, "provider": p.name, "model": p.model, "purpose": purpose, "template_id": template_id, "error": str(err)})
+            raise err from exc
+        resp.schema = json_schema
         self.audit(
             "model.response",
             {
@@ -166,6 +184,8 @@ class ModelRouter:
                 "usage": {"input": resp.usage.input_tokens, "output": resp.usage.output_tokens},
             },
         )
+        if self.budget:
+            self.budget.charge_model_call(resp.usage.input_tokens, resp.usage.output_tokens)
         if resp.refused:
             raise ModelRefused(f"模型拒答（stop_reason={resp.stop_reason}）")
         return resp

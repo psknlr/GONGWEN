@@ -93,6 +93,7 @@ class Runtime:
     config: GongwenConfig
     workspace: Path
     listeners: list[Callable[[str, dict[str, Any]], None]] = field(default_factory=list)  # (task_id, 事件记录)
+    model_cache: dict[str, Any] = field(default_factory=dict)  # 已建的模型适配（按模型配置），各阶段的模型网关共用
 
     # ---- 便捷访问
     @property
@@ -166,6 +167,7 @@ class Runtime:
             budget,
             audit=(lambda t, p: log.append(t, p, actor="model-gateway")) if log else None,
             providers=providers if providers is not None else self.ctx.maybe("model_providers"),
+            cache=self.model_cache,
         )
 
 
