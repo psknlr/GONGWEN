@@ -186,12 +186,17 @@ class Context:
         return results
 
     def bail(self, event: str, *args: Any, **kwargs: Any) -> Any:
-        """依次调用监听者，返回第一个非 None 结果（用于可阻断的钩子）。"""
+        """依次调用监听者，返回第一个非 None 结果。"""
+        return self.bail_if(lambda r: r is not None, event, *args, **kwargs)
+
+    def bail_if(self, accept: Callable[[Any], bool], event: str, *args: Any, **kwargs: Any) -> Any:
+        """依次调用监听者，返回第一个满足 accept 的结果（用于可阻断的钩子：只有阻断结果才中断，
+        前面的监听者返回放行值时不会遮盖后面监听者的阻断）。"""
         for lis in list(self._reg.listeners.get(event, [])):
             if not lis.scope.active:
                 continue
             r = lis.handler(*args, **kwargs)
-            if r is not None:
+            if accept(r):
                 return r
         return None
 

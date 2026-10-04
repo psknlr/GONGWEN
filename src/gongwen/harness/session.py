@@ -11,12 +11,18 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Iterator
+from typing import IO, Any, Callable, Iterator
 
 from ..schemas.common import sha256_text
+
+try:  # POSIX：同一任务的多个日志实例（多线程、多进程）经文件锁串行追加
+    import fcntl
+except ImportError:  # pragma: no cover - 非 POSIX 平台退化为进程内锁
+    fcntl = None
 
 GENESIS = "0" * 64
 _MAX_INLINE = 400  # 超过该长度的字符串字段只记录哈希与前缀
@@ -51,18 +57,31 @@ class SessionLog:
     def _tail(self) -> tuple[int, str]:
         if not self.path.exists():
             return 0, GENESIS
-        seq, last = 0, GENESIS
-        with self.path.open("r", encoding="utf-8") as fh:
-            for line in fh:
-                line = line.strip()
-                if not line:
-                    continue
-                rec = json.loads(line)
-                seq, last = rec["seq"], rec["hash"]
-        return seq, last
+        with self.path.open("rb") as fh:
+            return self._read_tail(fh)
+
+    @staticmethod
+    def _read_tail(fh: IO[bytes]) -> tuple[int, str]:
+        """读取最后一条记录的序号与哈希（只读文件末尾）。"""
+        fh.seek(0, os.SEEK_END)
+        pos, buf = fh.tell(), b""
+        while pos > 0 and b"\n" not in buf.rstrip():
+            step = min(4096, pos)
+            pos -= step
+            fh.seek(pos)
+            buf = fh.read(step) + buf
+        last = buf.rstrip().rsplit(b"\n", 1)[-1].strip()
+        if not last:
+            return 0, GENESIS
+        rec = json.loads(last)
+        return rec["seq"], rec["hash"]
 
     def append(self, type_: str, payload: dict[str, Any] | None = None, actor: str = "system", stage: str | None = None) -> dict[str, Any]:
-        with self._lock:
+        with self._lock, self.path.open("ab+") as fh:
+            if fcntl is not None:
+                fcntl.flock(fh, fcntl.LOCK_EX)  # 文件关闭时释放
+            # 同一任务可能同时存在多个日志实例：追加前重新读取链尾，不使用本实例缓存的序号与哈希
+            self._seq, self._last_hash = self._read_tail(fh)
             body = {
                 "seq": self._seq + 1,
                 "ts": datetime.now(timezone.utc).isoformat(),
@@ -74,8 +93,8 @@ class SessionLog:
             }
             digest = sha256_text(json.dumps(body, ensure_ascii=False, sort_keys=True, default=str))
             body["hash"] = digest
-            with self.path.open("a", encoding="utf-8") as fh:
-                fh.write(json.dumps(body, ensure_ascii=False, default=str) + "\n")
+            fh.write((json.dumps(body, ensure_ascii=False, default=str) + "\n").encode("utf-8"))
+            fh.flush()
             self._seq, self._last_hash = body["seq"], digest
         if self.on_append is not None:
             try:
