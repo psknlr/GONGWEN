@@ -364,6 +364,9 @@ class Engine:
                 details.append("以下关键数据为“材料记载”，如已核实请在确认时列入 confirm_facts：" + "、".join(f"{f.fact_id}（{f.attribute} {f.display_value()}）" for f in key))
             details += [f"待回答：{q}" for q in outline.open_questions]
             details += [f"缺少要素：{x}" for x in outline.contract_missing]
+            if genre is not None:  # 文种与程序问题在起草前呈现，而不是等审校发现
+                details += [f"文种与行文：{c}" for c in genre.conflicts]
+                details += [f"专门程序：{pr.name}（{pr.status}）——{pr.trigger}" for pr in genre.procedures]
             self._checkpoint(st, log, CheckpointKind.OUTLINE_CONFIRM, "请确认提纲与措施表（系统可以提示缺失和候选方案，但不替您决定预算、规模、责任和承诺）", details)
             return None
         if self._resolved(st, CheckpointKind.OUTLINE_CONFIRM) is None:

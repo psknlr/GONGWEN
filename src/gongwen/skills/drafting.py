@@ -295,7 +295,8 @@ class Drafter:
             block = Block(bid=self.ids.next("b"), kind="table", table=grid)
             blocks = [block]
             if t.notes:  # 表注限定统计口径，须随表保留；来源追溯见事实依据表，不写入正文
-                src = Sentence(sid=self.ids.next("s"), text="注：" + "；".join(n.strip("。") for n in t.notes) + "。", refs=[EvidenceRef(kind="material", id=t.material_id)], function="条件")
+                body = "；".join(re.sub(r"^(注|备注|说明)\s*[\d一二三四五六七八九十]*\s*[：:]", "", n.strip()).strip("。") for n in t.notes)
+                src = Sentence(sid=self.ids.next("s"), text=f"注：{body}。", refs=[EvidenceRef(kind="material", id=t.material_id)], function="条件")
                 blocks.append(Block(bid=self.ids.next("b"), kind="paragraph", sentences=[src]))
             notes.append(AttachmentNote(seq=seq, name=title))
             atts.append(Attachment(seq=seq, title=title, blocks=blocks))

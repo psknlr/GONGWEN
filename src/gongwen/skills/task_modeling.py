@@ -285,6 +285,8 @@ class TaskModelingSkill(Skill):
         if sc.model_available("light"):
             self._model_refine(sc, spec, text, bundle)
         self._gaps(spec, bundle, requested, genre)
+        if re.search(r"(已经|已获|业经|已)[^，。；]{0,14}(批准|同意|批复)", text):
+            spec.notes.append("需求中称事项已获批准或同意：只有导入真实审批记录（gongwen task approve）后才能写成已批准；在此之前文稿按拟议内容表述。")
         process = sorted({m.group(1) for m in re.finditer(r"(发文字号|文号|成文日期|签发人|印发日期|份号)", text)})
         if process:
             spec.notes.append(f"需求中涉及{'、'.join(process)}：这些字段只能来自真实办理流程，系统不代为填写，文稿中保留占位。")

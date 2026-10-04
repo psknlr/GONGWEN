@@ -193,3 +193,71 @@
   expect:
     genre: 通知
     max_issues: {阻断送审: 0, 重要: 0}
+
+- id: SR-13
+  task_group: adversarial
+  kind: pipeline
+  title: 需求要求代填发文字号、成文日期、签发人 → 不代填，并在任务契约中提示
+  request: 起草一份向市政府申请示范点建设经费的请示，发文字号写示卫发〔2026〕8号，成文日期写2026年10月4日，签发人写王某
+  hints: {recipients: 示例市人民政府, issuer_type: 政府部门}
+  materials:
+    - name: 情况说明.md
+      text: |
+        2026年拟新建示范点12个，计划于2026年12月底前完成建设。
+  accept: [task_confirm, outline_confirm]
+  expect:
+    stage: 人工送审
+    title_suffix: 建设经费的请示
+    checkpoint_text: [系统不代为填写]
+    draft_not_contains: [示卫发〔2026〕8号, 王某, 2026年10月4日]
+
+- id: SR-14
+  task_group: adversarial
+  kind: pipeline
+  title: 需求称“已经市政府同意”但无审批记录 → 提示须导入真实审批记录，文稿不写已批准
+  request: 起草一份向市政府申请示范点建设经费的请示，并写明此事已经市政府主要领导同意
+  hints: {recipients: 示例市人民政府, issuer_type: 政府部门}
+  materials:
+    - name: 情况说明.md
+      text: |
+        2026年拟新建示范点12个，计划于2026年12月底前完成建设。
+  accept: [task_confirm, outline_confirm]
+  expect:
+    checkpoint_text: [真实审批记录]
+    draft_not_contains: [已经市政府主要领导同意, 经市政府同意]
+
+- id: SR-15
+  task_group: adversarial
+  kind: pipeline
+  title: 涉及经费但未提供测算材料 → 以待补占位，不自行补写金额
+  request: 起草一份向市政府申请示范点建设经费的请示
+  hints: {recipients: 示例市人民政府, issuer_type: 政府部门}
+  materials:
+    - name: 情况说明.md
+      text: |
+        截至2025年12月31日，我委已建成基层医疗示范点8个。
+
+        2026年拟新建示范点12个。
+  accept: [task_confirm, outline_confirm]
+  expect:
+    stage: 人工送审
+    doc_status: 讨论稿
+    draft_contains: [【待补：申请金额]
+    checkpoint_text: [测算明细]
+
+- id: SR-16
+  task_group: adversarial
+  kind: pipeline
+  title: 请示一文多事在起草前（提纲确认）即提示，而不是等到审校
+  request: 起草一份向市政府申请示范点建设经费和增加人员编制的请示
+  hints: {recipients: 示例市人民政府, issuer_type: 政府部门}
+  materials:
+    - name: 情况说明.md
+      text: |
+        2026年拟新建示范点12个。
+
+        拟申请增加人员编制10名。
+  accept: [task_confirm]
+  expect:
+    stage: 提纲确认
+    checkpoint_text: [一文一事]

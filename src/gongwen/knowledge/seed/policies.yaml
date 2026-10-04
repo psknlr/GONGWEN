@@ -711,7 +711,7 @@
   regions:
   - 全国
   subjects:
-  - 党的机关
+  - 党组织
   matters:
   - 公文处理
   superseded_by:
@@ -731,7 +731,7 @@
   regions:
   - 全国
   subjects:
-  - 国家行政机关
+  - 行政机关
   matters:
   - 公文处理
   superseded_by:
@@ -748,7 +748,7 @@
   regions:
   - 全国
   subjects:
-  - 国家行政机关
+  - 行政机关
   matters:
   - 公文格式
   superseded_by:

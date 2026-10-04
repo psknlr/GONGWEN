@@ -148,7 +148,13 @@ def _engine(case: dict[str, Any], workdir: Path, flags: dict[str, bool]):
         "layout": {"render_check": bool(case.get("render", False))},
         "features": dict(flags),
     }
-    rt = build_runtime(workdir, overrides=overrides, model_providers=providers)
+    extra = case.get("extra_policies") or []
+    rt = build_runtime(workdir, overrides=overrides, model_providers=providers, allow_synthetic_policies=bool(extra))
+    if extra:
+        from ..schemas.policy import PolicyDocument
+
+        for p in extra:  # 用例自带的合成依据：标记为示例数据，只在评测环境参与判断
+            rt.policies.add(PolicyDocument.model_validate({**p, "synthetic": True}))
     return Engine(rt, providers)
 
 
@@ -172,10 +178,29 @@ def _materials(eng, task_id: str, case: dict[str, Any], user) -> list:
             buf = BytesIO()
             wb.save(buf)
             data = buf.getvalue()
+        elif "docx" in m:
+            data = _docx_bytes(m["docx"])
         else:
             data = str(m["text"]).encode("utf-8")
         out.append(eng.add_material(task_id, m["name"], data, by=user, declared=_clearance(m.get("clearance", "公开"))))
     return out
+
+
+def _docx_bytes(spec: dict[str, Any]) -> bytes:
+    """用例中的 DOCX 材料：可见段落 + 隐藏文字 + 批注式备注（用于测试隐藏内容不进入事实账本）。"""
+    from io import BytesIO
+
+    from docx import Document
+
+    doc = Document()
+    for t in spec.get("paragraphs", []):
+        doc.add_paragraph(t)
+    for t in spec.get("hidden", []):
+        run = doc.add_paragraph().add_run(t)
+        run.font.hidden = True
+    buf = BytesIO()
+    doc.save(buf)
+    return buf.getvalue()
 
 
 def _human_loop(eng, task_id: str, case: dict[str, Any], user, max_rounds: int = 12):
@@ -340,6 +365,10 @@ def _expect_pipeline(eng, st, exp: dict[str, Any], admissions: list) -> tuple[li
             for x, n in v.items():
                 cnt = text.count(x)
                 add(f"occurrences:{x}", cnt <= n, f"{cnt} 次")
+        elif k == "attachment_text_contains":
+            att_text = " ".join(b.text() if b.kind != "table" else " ".join(" ".join(r) for r in (b.table or [])) for a in (ir.attachments if ir else []) for b in a.blocks)
+            for x in v:
+                add(f"attachment_text:{x}", x in att_text, att_text[:80])
         elif k == "attachment_table_contains":
             cells = " ".join(" ".join(r) for a in (ir.attachments if ir else []) for b in a.blocks if b.table for r in b.table)
             for x in v:
@@ -358,7 +387,12 @@ DIRECT_SYSTEM = (
 def _material_text(case: dict[str, Any]) -> str:
     parts = []
     for m in case.get("materials") or []:
-        body = "\n".join(",".join(str(c) for c in r) for r in m["rows"]) if "rows" in m else str(m["text"])
+        if "rows" in m:
+            body = "\n".join(",".join(str(c) for c in r) for r in m["rows"])
+        elif "docx" in m:
+            body = "\n".join(m["docx"].get("paragraphs", []))  # 隐藏文字不是可用来源
+        else:
+            body = str(m["text"])
         parts.append(f"【{m['name']}】\n{body}")
     return "\n\n".join(parts)
 
@@ -415,8 +449,8 @@ def run_direct(case: dict[str, Any], workdir: Path, providers: dict | None = Non
     from ..llm.base import ChatMessage
 
     res = CaseResult(case["id"], case["group"], case["kind"], case.get("title", ""), DIRECT, False, task_group=case.get("task_group", ""))
-    if case["kind"] in ("check", "admission"):
-        res.skipped = "不适用：该用例不涉及起草"
+    if case["kind"] in ("check", "admission", "matter"):
+        res.skipped = "不适用：该用例不涉及单篇起草" if case["kind"] != "matter" else "不适用：多文稿事项用例"
         return res
     eng = _engine({**case, "model": None}, workdir, {})
     router = eng.rt.router(providers=providers)
@@ -478,7 +512,7 @@ def _run_case(case: dict[str, Any], variant: str, flags: dict[str, bool]) -> Cas
 
                 eng = _engine(case, work, flags)
                 ir = ir_from_text(case["text"], genre=case.get("genre"))
-                ex = check_external(ir, eng.rt, as_of=date.fromisoformat(case["as_of"]) if case.get("as_of") else None)
+                ex = check_external(ir, eng.rt, as_of=date.fromisoformat(case["as_of"]) if case.get("as_of") else None, region=case.get("region"))
                 rules = {i.rule.rule_id for i in ex.issues if i.rule}
                 exp = case.get("expect") or {}
                 for r in exp.get("rules_present", []):
@@ -500,6 +534,26 @@ def _run_case(case: dict[str, Any], variant: str, flags: dict[str, bool]) -> Cas
                         "unexpected_major_plus": sum(1 for i in ex.issues if i.severity.rank >= 3 and (not i.rule or i.rule.rule_id not in expected)),
                     }
                 )
+            elif kind == "matter":
+                # 同一事项的多份文稿：依次办理，可在其中一份上做修订，期望在指定任务上核对
+                eng = _engine(case, work, flags)
+                user = default_user("eval")
+                states, admissions, matter = [], [], None
+                for t in case["tasks"]:
+                    st = eng.create_task(t["request"], by=user, matter_id=matter, hints=t.get("hints") or {})
+                    matter = st.matter_id
+                    admissions += _materials(eng, st.task_id, t, user)
+                    states.append(_human_loop(eng, st.task_id, t, user))
+                if case.get("revise"):
+                    rv = case["revise"]
+                    _revise(eng, states[rv.get("task", 0)].task_id, rv, user)
+                target = eng.load_state(states[case.get("expect_task", -1)].task_id)
+                checks, metrics = _expect_pipeline(eng, target, case.get("expect") or {}, admissions)
+                res.checks += checks
+                res.metrics.update(metrics)
+                ir_final = eng.current_ir(target)
+                if ir_final is not None:
+                    res.draft = ir_final.to_markdown()
             else:
                 eng = _engine(case, work, flags)
                 user = default_user("eval")

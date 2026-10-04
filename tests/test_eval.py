@@ -2,7 +2,7 @@
 
 from gongwen.eval import FLAGS, GROUPS, load_cases, run_case, summarize, variants
 
-KINDS = {"pipeline", "check", "admission", "revision", "model"}
+KINDS = {"pipeline", "check", "admission", "revision", "model", "matter"}
 
 
 def test_cases_are_well_formed():
@@ -13,6 +13,8 @@ def test_cases_are_well_formed():
         assert c["kind"] in KINDS and c.get("title") and c.get("expect"), c["id"]
         if c["kind"] == "check":
             assert c.get("text")
+        elif c["kind"] == "matter":
+            assert len(c.get("tasks", [])) >= 2 and all(t.get("request") for t in c["tasks"])
         else:
             assert c.get("request")
     assert sum(1 for c in cases if c.get("control")) >= 3  # 干净对照用于度量误报

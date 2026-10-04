@@ -283,3 +283,42 @@
       进度安排: [【待补]
     max_occurrences: {完成选址: 1, 负责统筹协调: 1}
 
+
+- id: GR-16
+  task_group: adversarial
+  kind: pipeline
+  title: 政府部门向下级人民政府发指令性通知 → 超出权限
+  request: 起草一份要求各区人民政府加快示范点建设的通知
+  hints: {recipients: 各区人民政府, issuer_type: 政府部门}
+  materials:
+    - name: 情况说明.md
+      text: |
+        2026年拟新建示范点12个，计划于2026年12月底前完成建设。
+  human:
+    - {at: 任务契约确认, option: accept}
+  expect:
+    stage: 超出权限
+    authority_codes: [DEPT_TO_LOWER_GOV]
+
+- id: GR-17
+  task_group: single
+  kind: pipeline
+  title: 医院参照执行：请示自称“我院”，并提示参照执行不等同于行政机关权限
+  request: 起草一份向市卫生健康委员会申请购置医疗设备经费的请示
+  hints: {recipients: 示例市卫生健康委员会, issuer_type: 医院}
+  env: {unit_profile: hospital, unit_name: 示例市第一人民医院}
+  materials:
+    - name: 设备购置说明.md
+      text: |
+        为提升急诊救治能力，我院拟购置除颤仪10台，计划于2026年6月底前完成采购。
+    - name: 经费测算表.csv
+      text: |
+        项目,金额（万元）
+        除颤仪,50
+        合计,50
+  accept: [task_confirm, outline_confirm]
+  expect:
+    stage: 人工送审
+    genre: 请示
+    draft_contains: [我院, 经费合计50万元]
+    draft_not_contains: [我委]
