@@ -38,6 +38,7 @@ _SUBSTANTIVE = re.compile(
     r"|应当|必须|务必|须于|须在|要在|要于|确保|不得|严禁|完成|报送|提交|可以|鼓励|支持|提倡|引导)"
 )
 _MEETING_UNDECIDED = re.compile(r"(未作决定|未作出决定|未决定|未议定|未形成(决定|意见|结论)|不同意|暂不|暂缓|待研究|再研究|另行研究|进一步研究|需进一步|会后研究|未达成一致)")
+_MEETING_INFO = re.compile(r"^(时间|地点|主持人|主持|出席|参加|列席|请假|缺席|记录人|记录)[：:]\s*(.+)$")
 _PROCESS_FIELDS = re.compile(r"(发文字号|文号|成文日期|签发人|印发日期|份号|落款日期)")
 
 
@@ -178,6 +179,13 @@ class FactLedgerSkill(Skill):
         return FactStatus.RECORDED, tags, verification
 
     def _text_facts(self, sc: SkillContext, ledger: FactLedger, u: SourceUnit, mat) -> None:
+        m_info = _MEETING_INFO.match(u.text.strip())
+        if m_info and mat is not None and mat.role == "meeting_record":
+            # 会议记录的“时间、地点、主持人、出席、列席、请假”：纪要开头与出席名单的来源
+            key = {"主持": "主持人", "参加": "出席", "缺席": "请假", "记录": "记录人"}.get(m_info.group(1), m_info.group(1))
+            loc = Locator(material_id=u.material_id, kind=u.kind, path=u.locator.path, excerpt=u.text[:80])
+            ledger.facts.append(Fact(fact_id=sc.ids.next("F"), statement=m_info.group(2).strip(), attribute=f"会议·{key}", kind="text", status=FactStatus.RECORDED, sources=[loc], tags=["meeting_record", f"meeting:info:{key}"]))
+            return
         if u.kind == "heading" or _TITLE_LIKE.match(u.text.strip()):
             return  # 材料标题、层次标题不是事实陈述
         for s in split_sentences(u.text):
@@ -203,6 +211,9 @@ class FactLedgerSkill(Skill):
                 d = "discussion" if _MEETING_UNDECIDED.search(s) else meeting_decision(s)
                 if d:
                     tags = tags + [f"meeting:{d}"]
+                # 讨论类再分：未决事项列入“待研究事项”，听取汇报、发言与看法列入“主要情况”
+                if d != "decided":
+                    tags = tags + ["meeting:pending" if _MEETING_UNDECIDED.search(s) else "meeting:situation"]
             if nums:
                 for n in nums:
                     # 状态按数字所在小句判断：“已建成8个，拟新建12个”中 8 是现状、12 是拟议

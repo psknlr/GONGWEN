@@ -44,7 +44,7 @@ GENRE_SECTIONS: dict[str, list[tuple[str, str, str]]] = {
     "报告": [("work", "工作开展情况", "事实"), ("problems", "存在的问题", "分析"), ("plans", "下一步工作安排", "措施")],
     "通知": [("items", "主要任务", "措施"), ("requirements", "工作要求", "要求")],
     "函": [("matter", "", "请求")],
-    "纪要": [("decisions", "会议议定事项", "措施"), ("pending", "待研究事项", "事实")],
+    "纪要": [("situation", "", "事实"), ("decisions", "会议议定事项", "措施"), ("pending", "待研究事项", "事实")],
     "批复": [("answer", "", "措施"), ("requirements", "", "要求")],
     # 通报、决定、通告、公告篇幅较短，按段落组织，不设层次标题
     "通报": [("facts", "", "事实"), ("verdict", "", "分析"), ("requirements", "", "要求")],
@@ -146,7 +146,8 @@ class OutlinePlanningSkill(Skill):
         )
         # ---- 按文种内容契约组织章节
         meeting_decided = [f for f in usable if "meeting:decided" in f.tags]
-        meeting_discussed = [f for f in usable if "meeting:discussion" in f.tags]
+        meeting_pending = [f for f in usable if "meeting:pending" in f.tags or ("meeting:discussion" in f.tags and "meeting:situation" not in f.tags)]
+        meeting_situation = [f for f in usable if "meeting:situation" in f.tags]
         # 已作为措施来源或已被前面章节使用的事实，不在“要求”“保障”等章节重复陈述
         used: set[str] = set(measure_sources)
         used_text: set[str] = {f.statement for f in usable if f.fact_id in measure_sources}
@@ -165,7 +166,7 @@ class OutlinePlanningSkill(Skill):
             elif role == "facts" and doc_kind == "通报":
                 # 通报的事实经过：现状与问题都是事实，不因含“滞后”等词而归入评价
                 pick = [f for f in fresh(current) if "computed" not in f.tags and not DECISION_CUES.search(f.statement)][:8]
-            elif role in ("facts", "work", "overview", "findings", "method", "situation"):
+            elif role in ("facts", "work", "overview", "findings", "method", "situation") and doc_kind != "纪要":
                 pick = [f for f in fresh(done_or_ongoing) if f.kind != "plain" and "computed" not in f.tags][:8]
             elif role in ("background", "basis"):
                 # 背景与依据：现状与问题（政策依据在开头段引用）
@@ -202,7 +203,9 @@ class OutlinePlanningSkill(Skill):
                 if not pick:
                     plan.open_questions.append("会议记录中未识别到明确的议定事项。纪要只能写入确已议定的事项，请确认。")
             elif role == "pending":
-                pick = meeting_discussed
+                pick = meeting_pending
+            elif role == "situation" and doc_kind == "纪要":
+                pick = meeting_situation
             elif role in ("requirements", "evaluation"):
                 # 执行要求：带时限、报送、联系人的要求性陈述；已完成或推进中的现状陈述不是要求
                 pick = [f for f in fresh(usable) if (DATE_RE.search(f.statement) or "报送" in f.statement or "联系人" in f.statement) and f.progress not in (Progress.COMPLETED, Progress.ONGOING) and "computed" not in f.tags and "table" not in f.tags]

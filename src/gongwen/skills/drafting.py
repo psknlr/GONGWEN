@@ -206,9 +206,21 @@ class Drafter:
             core = re.sub(r"^(商请|请求|恳请|请)(支持|协助|帮助|配合|解决)?", "", subject) or subject
             text = (purpose + "，" if purpose else "") + f"现就{core}有关事项函商如下。"
         elif k == "纪要":
-            meet = [f for f in self.ledger.facts if "meeting_record" in f.tags]
-            info = norm_sentence(meet[0].statement) if meet else self.placeholder("meeting_info", "会议时间、地点、主持人和会议名称")
-            text = info.rstrip("。") + "。现将会议议定事项纪要如下。"
+            info = {f.attribute.split("·", 1)[1]: f for f in self.ledger.facts if "meeting_record" in f.tags and f.attribute.startswith("会议·")}
+            meeting = re.sub(r"(的)?(会议)?纪要$", "", self.outline.title).strip() or subject
+            meeting = meeting if meeting.endswith(("会", "会议")) else meeting + "会议"
+            has_situation = any(sec.role == "situation" and any(p.refs for p in sec.paragraphs) for sec in self.outline.sections)
+            lead = "现将会议主要情况和议定事项纪要如下。" if has_situation else "现将会议议定事项纪要如下。"
+            if "时间" in info or "主持人" in info:
+                # 会议基本信息取自会议记录的“时间、地点、主持人”，不补写
+                when = re.sub(r"\s*\d{1,2}[:：]\d{2}.*$", "", info["时间"].statement) if "时间" in info else self.placeholder("meeting_time", "会议时间")
+                host = info["主持人"].statement if "主持人" in info else self.placeholder("meeting_host", "主持人")
+                place = f"在{info['地点'].statement}" if "地点" in info else ""
+                text = f"{when}，{host}{place}主持召开{meeting}。{lead}"
+                return self.para([self.sent(text, [EvidenceRef(kind="fact", id=f.fact_id) for key, f in info.items() if key in ("时间", "地点", "主持人")], "事实")])
+            meet = [f for f in self.ledger.facts if "meeting_record" in f.tags and "meeting:situation" not in f.tags and "meeting:decided" not in f.tags]
+            info_text = norm_sentence(meet[0].statement) if meet else self.placeholder("meeting_info", "会议时间、地点、主持人和会议名称")
+            text = info_text.rstrip("。") + "。" + lead
             return self.para([self.sent(text, [EvidenceRef(kind="fact", id=meet[0].fact_id)] if meet else [], "事实")])
         elif k == "批复":
             inc = find_incoming(self.bundle)
@@ -283,7 +295,7 @@ class Drafter:
                     elif sec.role in required and sec.role in ("division", "schedule", "scope", "goal"):
                         # 内容契约要求的部分：以待补占位提示缺失，不擅自补写责任、进度与指标
                         sents = [self.sent(self.placeholder(sec.role, f"{sec.heading}（材料中未提供，系统不代为确定）"), [], p.function)]
-                    elif sec.role in ("pending", "problems", "evaluation", "division", "schedule", "scope", "goal"):
+                    elif sec.role in ("pending", "problems", "evaluation", "division", "schedule", "scope", "goal") or (sec.role == "situation" and self.doc_kind == "纪要"):
                         continue
                     elif gi_ and any(c["key"] == sec.role and not c.get("required", True) for c in gi_.contract):
                         continue  # 契约中的可选部分：没有材料就不写
@@ -394,6 +406,13 @@ class Drafter:
         if c and not issuing:
             blocks.append(c)
         notes, atts = self.attachments()
+        attendees = {}
+        if self.doc_kind == "纪要":
+            # 出席、请假、列席名单照会议记录列出（GB/T 9704—2012 10.3：纪要格式可根据实际制定）
+            for f in self.ledger.facts:
+                for key in ("出席", "请假", "列席"):
+                    if f"meeting:info:{key}" in f.tags:
+                        attendees[key] = [x.strip() for x in re.split(r"[、，,；;]", f.statement.rstrip("。")) if x.strip()]
         if issuing:
             name = re.sub(r"^.*?关于印发《(.+)》的通知$", r"\1", self.outline.title) if "《" in self.outline.title else f"{self.spec.subject.value}{g.material_type}"
             notes = [AttachmentNote(seq=1, name=name)] + [AttachmentNote(seq=n.seq + 1, name=n.name) for n in notes]
@@ -411,6 +430,7 @@ class Drafter:
             blocks=blocks,
             attachment_notes=notes,
             attachments=atts,
+            attendees=attendees,
             signature=Signature(organs=[self.issuer or "【待确认发文机关】"], seal_mode="no_seal" if fmt == "jiyao" or (g.material_type and not issuing) else "seal"),
             note="联系人：【待补】，联系电话：【待补】" if g.direction == "上行文" else "",
             imprint=Imprint(cc=[r.get("name") if isinstance(r, dict) else str(r) for r in (self.spec.cc.value or [])] if self.spec.cc.known else [], printer="【待确认印发机关】"),
