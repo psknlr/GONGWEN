@@ -290,6 +290,8 @@ class Compiler:
     def header_block(self) -> None:
         ir, h = self.ir, self.ir.header
         fmt = ir.format_type
+        if fmt == "plain":
+            return  # 事务文书（方案、总结、讲话稿等）不设版头
         lines_used = 0
         for val, key in ((h.copy_no, "copy_no"), (h.secrecy, "secrecy"), (h.urgency, "urgency")):
             if val:
@@ -306,8 +308,9 @@ class Compiler:
         else:
             top_mm = self.p.el("organ_mark")["top_from_type_area_mm"]
         size_pt = min(self.p.size(self.p.el("organ_mark")["max_size"]), (self.p.type_width_pt * 0.96) / max(1.0, text_width_chars(mark or "文")))
-        # 字框上缘到行顶约有 0.25 个字高的内部留白（估算），从间距中扣除，使字上缘落在 35mm 处
-        gap_pt = top_mm / MM_PER_PT - lines_used * self.p.line_pt - (0.25 * size_pt if mark else 0)
+        # 固定行距小于字体自然行高时，字框上缘会高出行顶约 0.13 个字高（LibreOffice 实测校准，网格行距 579 缇），
+        # 补入间距，使字上缘落在 35mm 处
+        gap_pt = top_mm / MM_PER_PT - lines_used * self.p.line_pt + (0.13 * size_pt if mark else 0)
         if gap_pt > 1:
             self.para(line_pt=gap_pt)
         if mark:
@@ -326,6 +329,12 @@ class Compiler:
             rule = self.para(line_pt=self.p.line_pt)
             self.border(rule, "bottom", "FF0000", self.p.el("red_rule")["width_pt"], 0)
             self.blank(1)
+            return
+        if fmt == "command":
+            # 命令（令）格式（10.2）：发文机关标志下空二行居中编排令号，令号下空二行编排正文；不设分隔线与标题
+            self.blank(2)
+            self.para(self.short_placeholder(h.doc_number, "第【待编号】号"), align=WD_ALIGN_PARAGRAPH.CENTER)
+            self.blank(2)
             return
         self.blank(self.p.el("doc_number")["blank_lines_after_mark"])
         upward = ir.direction == "上行文"
@@ -351,10 +360,18 @@ class Compiler:
     # ------------------------------------------------------------------ 主体
     def title_block(self) -> None:
         el = self.p.el("title")
-        self.blank(el["blank_lines_before"])
-        issuer = self.ir.signature.organs[0] if self.ir.signature.organs else ""
-        for line in split_title(self.ir.title, el["max_chars_per_line"], issuer):
-            self.para(line, font="xiaobiaosong", size=el["size"], align=WD_ALIGN_PARAGRAPH.CENTER, keep_next=True)
+        if self.ir.title:
+            self.blank(el["blank_lines_before"])
+            issuer = self.ir.signature.organs[0] if self.ir.signature.organs else ""
+            for line in split_title(self.ir.title, el["max_chars_per_line"], issuer):
+                self.para(line, font="xiaobiaosong", size=el["size"], align=WD_ALIGN_PARAGRAPH.CENTER, keep_next=True)
+        if self.ir.title_note:
+            # 题注（实务）：标题下居中，楷体
+            par = self.para(align=WD_ALIGN_PARAGRAPH.CENTER, keep_next=True)
+            self.add_text(par, self.ir.title_note, font="kaiti")
+        if self.ir.salutation:
+            self.blank(1)
+            self.para(self.ir.salutation)
 
     def recipients_block(self) -> None:
         if not self.ir.recipients:
@@ -424,7 +441,18 @@ class Compiler:
         date = sig.date
         # 署名、成文日期不能脱离正文单独落到下一面：前一段、空行与署名行都与下段同页（成文日期本身不设）
         self.keep_last_with_next()
-        if sig.seal_mode == "seal":
+        if sig.seal_mode == "signature_stamp":
+            # 加盖签发人签名章（7.3.5.3）：正文下空二行右空四字加盖签名章，签名章左空二字标注签发人职务；
+            # 签名章下空一行右空四字编排成文日期
+            el = self.p.el("signature_seal")
+            right = el["date_right_indent_chars"]
+            self.blank(2, line_pt=self.gap_pt(), keep_next=True)
+            self.para(f"{sig.signer_title or '【待补：签发人职务】'}　　【签名章】", align=WD_ALIGN_PARAGRAPH.RIGHT, right=right, keep_next=True)
+            self.blank(1, keep_next=True)
+            self.para(date, align=WD_ALIGN_PARAGRAPH.RIGHT, right=right)
+        elif sig.seal_mode == "none":
+            pass  # 简报、讲话稿等不署名
+        elif sig.seal_mode == "seal":
             el = self.p.el("signature_seal")
             self.blank(2, line_pt=self.gap_pt(), keep_next=True)
             dw = text_width_chars(date)

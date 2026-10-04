@@ -18,7 +18,9 @@ def _is_placeholder(v: str) -> bool:
 def check_header_fields(ctx: CheckContext) -> list[ReviewIssue]:
     out: list[ReviewIssue] = []
     h = ctx.ir.header
-    if not _is_placeholder(h.doc_number):
+    if ctx.ir.format_type in ("command", "brief"):
+        pass  # 令号“第×号”、简报期号“第×期”不是发文字号
+    elif not _is_placeholder(h.doc_number):
         if not DOC_NO_RE.match(h.doc_number):
             hint = []
             if re.search(r"[\[\(（［]\d{4}[\]\)）］]", h.doc_number):

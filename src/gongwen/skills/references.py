@@ -52,10 +52,15 @@ def addressee(organ: str, direction: str = "下行文") -> str:
     return ("你" if direction == "下行文" else "贵") + short_name(organ)
 
 
-def find_incoming(bundle: SourceBundle | None) -> Incoming | None:
-    """在材料中找来文：标题形如“××关于××的请示”，发文字号取标题前后几行内的第一个文号。"""
+_FORWARDABLE = re.compile(r"^(.{0,40}?关于.{2,60}的(通知|决定|意见|办法|方案|规定|通报|批复|请示|报告|函))$")
+
+
+def find_incoming(bundle: SourceBundle | None, forwarding: bool = False) -> Incoming | None:
+    """在材料中找来文：标题形如“××关于××的请示”（转发时也包括通知、决定、办法等），
+    发文字号取标题前后几行内的第一个文号。"""
     if not bundle:
         return None
+    pattern = _FORWARDABLE if forwarding else _INCOMING_TITLE
     by_mat: dict[str, list[str]] = {}
     for u in bundle.units:
         if u.kind in ("comment", "table_cell", "sheet_cell"):
@@ -63,7 +68,7 @@ def find_incoming(bundle: SourceBundle | None) -> Incoming | None:
         by_mat.setdefault(u.material_id, []).append(u.text.strip())
     for mid, lines in by_mat.items():
         for i, line in enumerate(lines[:8]):
-            m = _INCOMING_TITLE.match(line)
+            m = pattern.match(line)
             if not m:
                 continue
             nearby = " ".join(lines[max(0, i - 2) : i + 3])

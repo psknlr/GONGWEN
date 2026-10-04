@@ -82,10 +82,11 @@ class GenreAuthoritySkill(Skill):
         g = kb.genre(genre)
         if genre == "通知" and Purpose.ISSUE_PLAN.value in spec.purposes:
             # “印发……方案的通知”：通知是文种，方案是所印发的事务材料
-            m = re.search(r"印发[^，。]{0,40}?(实施方案|工作方案|方案)", spec.request_text)
+            m = re.search(r"印发[^，。]{0,40}?(实施方案|工作方案|方案|工作要点|要点|管理办法|实施细则|办法|细则|管理制度)", spec.request_text)
             if m:
-                genre, g = "工作方案", kb.genre("工作方案")
-                why = "方案、办法等需由通知印发：通知为文种，方案作为附件"
+                genre = kb.canonical_genre(m.group(1)) or "工作方案"
+                g = kb.genre(genre)
+                why = "方案、要点、办法等需由通知印发：通知为文种，所印发的材料作为附件"
         decision = GenreDecision(
             layer=spec.layer.value or TaskLayer.FORMAL.value,
             direction=direction,
@@ -99,12 +100,18 @@ class GenreAuthoritySkill(Skill):
             if g.issue_vehicle:
                 decision.reasons.append(f"“{genre}”不是条例第八条所列文种；需要正式下发时，应以{g.issue_vehicle}印发，{genre}作为附件")
                 decision.citations.append(citation("GW-GENRE-011"))
-        if decision.direction == Direction.UNKNOWN.value and decision.suggested_genre:
+        if decision.suggested_genre:
             dirs = (kb.genre(decision.suggested_genre).directions or []) if kb.genre(decision.suggested_genre) else []
-            if len(dirs) == 1:
-                # 文种只有一种行文方向（报告只能上行、决定与通报下行）：据文种确定，仍在任务契约中供人工核对
+            explicit = decision.suggested_genre == requested
+            if len(dirs) == 1 and (decision.direction == Direction.UNKNOWN.value or (explicit and decision.direction != dirs[0])):
+                # 文种只有一种行文方向（报告上行、函平行、决定与通报下行）：据文种确定，仍在任务契约中供人工核对
+                if decision.direction != Direction.UNKNOWN.value:
+                    decision.reasons.append(f"需求中的行文关系推断为{decision.direction}，与所要求的文种“{decision.suggested_genre}”不一致，已按文种定为{dirs[0]}，请核对收发文机关关系")
+                else:
+                    decision.reasons.append(f"行文方向未在需求中说明，按文种“{decision.suggested_genre}”定为{dirs[0]}")
                 decision.direction = dirs[0]
-                decision.reasons.append(f"行文方向未在需求中说明，按文种“{decision.suggested_genre}”定为{dirs[0]}")
+            elif decision.direction == Direction.UNKNOWN.value and Direction.PUBLIC.value in dirs:
+                decision.direction = Direction.PUBLIC.value  # 决议、命令（令）、公报等公布性文种
         if decision.suggested_genre:
             gi = kb.genre(decision.suggested_genre)
             decision.format_type = {"函": "letter", "纪要": "jiyao", "命令（令）": "command"}.get(decision.suggested_genre, "general")
@@ -185,6 +192,34 @@ class GenreAuthoritySkill(Skill):
                 d.authority_findings.append(
                     AuthorityFinding(code="MULTI_MAIN", message="上行文原则上主送一个上级机关，根据需要同时抄送相关上级机关和同级机关", severity="一般", basis=[citation("GW-ROUTE-001")])
                 )
+        # 只能由特定机关使用的文种
+        if genre == "命令（令）" and iname and not (iname.endswith("人民政府") or iname.startswith(("国务院", "中华人民共和国"))):
+            d.authority_findings.append(
+                AuthorityFinding(
+                    code="ORDER_ISSUER",
+                    message=f"“{iname}”不是有权发布命令（令）的机关：命令（令）用于公布行政法规和规章、宣布施行重大强制性措施、批准授予和晋升衔级、嘉奖有关单位和人员；地方规章以人民政府令公布，政府部门不得以本部门名义发令。需部署或告知的事项可改用通知、通告",
+                    severity="阻断送审",
+                    basis=[citation("GW-GENRE-013")],
+                    out_of_authority=True,
+                )
+            )
+            for alt in ("通知", "通告"):
+                if alt not in d.alternatives:
+                    d.alternatives.append(alt)
+        if genre == "议案":
+            if iname and not iname.endswith("人民政府"):
+                d.authority_findings.append(
+                    AuthorityFinding(
+                        code="MOTION_ISSUER",
+                        message=f"议案只能由各级人民政府按照法律程序向同级人民代表大会或其常务委员会提请审议；“{iname}”不能以本机关名义提出议案，应报本级人民政府研究后由政府提请",
+                        severity="阻断送审",
+                        basis=[citation("GW-GENRE-014")],
+                        out_of_authority=True,
+                    )
+                )
+            bad = [r for r in rnames if r and "人民代表大会" not in r]
+            if bad:
+                d.authority_findings.append(AuthorityFinding(code="MOTION_RECIPIENT", message=f"议案的主送机关应为同级人民代表大会或其常务委员会（当前：{'、'.join(bad)}）", severity="重要", basis=[citation("GW-GENRE-014")]))
         # 同一地方的两个政府部门之间一般不相隶属：请求批准应使用函（条例第八条（十四））
         prefix = re.match(r"^(.{2,6}?[省市县区])", iname or "")
         if prefix and itype == "政府部门" and d.direction == Direction.UP.value:
@@ -258,7 +293,7 @@ class GenreAuthoritySkill(Skill):
                     materials_needed=["相关部门意见或会签记录"],
                 )
             )
-        if d.direction == Direction.UP.value:
+        if d.direction == Direction.UP.value and d.suggested_genre:  # 汇报材料等事务文书不是正式行文，不另走签发程序
             if itype == "政府部门" and any(k in text for k in ("重大", "重要")):
                 d.procedures.append(
                     ProcedureRequirement(

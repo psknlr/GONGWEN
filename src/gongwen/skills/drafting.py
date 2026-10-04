@@ -68,6 +68,24 @@ def planned_form(text: str) -> str:
     return t
 
 
+NO_OPENING = ("决议", "命令（令）", "公报", "议案", "简报", "工作要点", "管理办法")
+NO_RECIPIENTS = ("纪要", "公告", "通告", "公报", "决议", "命令（令）", "工作方案", "讲话稿", "汇报材料", "工作总结", "调研报告", "简报", "工作要点", "管理办法")
+# 发文机关为人民政府时，签署令、议案的负责人职务
+GOV_HEAD = (("国务院", "国务院总理"), ("省人民政府", "省长"), ("自治区人民政府", "自治区主席"), ("市人民政府", "市长"), ("州人民政府", "州长"), ("盟行政公署", "盟长"), ("县人民政府", "县长"), ("区人民政府", "区长"), ("旗人民政府", "旗长"), ("乡人民政府", "乡长"), ("镇人民政府", "镇长"))
+_MEETING_NAME = re.compile(r"((?:[一-鿿]{0,20}?)第[一二三四五六七八九十百]+届[一-鿿]{0,30}?(?:第[一二三四五六七八九十百]+次(?:全体)?会议|会议)|[一-鿿]{2,30}?第[一二三四五六七八九十百]+次(?:全体|常务|主任)?会议)")
+
+
+def _cn_ordinal(n: int) -> str:
+    if n <= 10:
+        return "十" if n == 10 else CN[n - 1]
+    tens, ones = divmod(n, 10)
+    return ("" if tens == 1 else CN[tens - 1]) + "十" + (CN[ones - 1] if ones else "")
+
+
+def gov_head(issuer: str) -> str:
+    return next((t for suffix, t in GOV_HEAD if issuer.endswith(suffix)), "")
+
+
 class Drafter:
     def __init__(self, sc: SkillContext, spec: TaskSpec, genre: GenreDecision, ledger: FactLedger, policies: PolicyPack, outline: OutlinePlan, bundle: SourceBundle | None, doc_id: str, matter_id: str):
         self.sc = sc
@@ -78,6 +96,7 @@ class Drafter:
         self.outline = outline
         self.bundle = bundle
         self.doc_kind = genre.material_type or genre.suggested_genre or "通知"
+        self.item_no = 0  # 办法的“第×条”、要点的“（×）”连续编号
         self.ids = IdAllocator()
         self.doc_id = doc_id
         self.matter_id = matter_id
@@ -175,7 +194,7 @@ class Drafter:
                 return m.group(1)
         return ""
 
-    def opening(self) -> Block:
+    def opening(self) -> Block | None:
         subject = str(self.spec.subject.value or "有关事项")
         purpose = self.purpose_clause()
         cites, crefs = self.citations()
@@ -183,6 +202,23 @@ class Drafter:
         parts = []
         if purpose and k in ("请示", "函") or (purpose and k not in ("报告", "纪要", "批复")):
             self.used_purpose = purpose
+        variant = self.outline.variant
+        issuing = bool(self.genre.material_type and self.genre.suggested_genre == "通知")
+        if (k in NO_OPENING and not issuing) or variant == "任免":
+            return None  # 正文直接陈述事项（决议、令、公报、议案、简报、要点、办法、任免通知）
+        if variant == "转发" and find_incoming(self.bundle, forwarding=True):
+            inc = find_incoming(self.bundle, forwarding=True)
+            ref = f"《{inc.title}》" + (f"（{inc.doc_number}）" if inc.doc_number else "")
+            own = any(sec.role == "requirements" and any(p.refs or p.measure_ids for p in sec.paragraphs) for sec in self.outline.sections)
+            verb = "批转" if "批转" in self.spec.request_text else "转发"
+            tail = "并结合实际提出以下要求，请一并认真贯彻落实。" if own else "请结合实际认真贯彻落实。"
+            text = f"现将{ref}{verb}给你们，{tail}"
+            return self.para([self.sent(text, crefs + [EvidenceRef(kind="material", id=inc.material_id, note="来文")], "依据")])
+        if k == "讲话稿":
+            m = re.match(r"^在(.+?)上的讲话$", self.outline.title)
+            occasion = m.group(1) if m else subject
+            refs = [EvidenceRef(kind="task", id="subject", note="事由取自经确认的办文需求")] if re.search(r"\d", occasion) else []
+            return self.para([self.sent(f"下面，我就{occasion}的有关工作讲几点意见。", refs, "背景")])
         if k == "请示":
             if purpose:
                 parts.append(purpose)
@@ -204,7 +240,9 @@ class Drafter:
             text = f"{addr}{ref}收悉。经研究，现将有关情况函复如下。"
         elif k == "函":
             core = re.sub(r"^(商请|请求|恳请|请)(支持|协助|帮助|配合|解决)?", "", subject) or subject
-            text = (purpose + "，" if purpose else "") + f"现就{core}有关事项函商如下。"
+            verb = "函询" if re.search(r"询问|咨询|了解|函询", self.spec.request_text) else ("函告" if re.search(r"告知|函告", self.spec.request_text) else "函商")
+            core = re.sub(r"^(询问|咨询|了解|告知)", "", core) or core
+            text = (purpose + "，" if purpose else "") + f"现就{core}有关事项{verb}如下。"
         elif k == "纪要":
             info = {f.attribute.split("·", 1)[1]: f for f in self.ledger.facts if "meeting_record" in f.tags and f.attribute.startswith("会议·")}
             meeting = re.sub(r"(的)?(会议)?纪要$", "", self.outline.title).strip() or subject
@@ -235,7 +273,10 @@ class Drafter:
         elif self.genre.material_type and self.genre.suggested_genre == "通知":
             name = re.sub(r"^.*?关于印发《(.+)》的通知$", r"\1", self.outline.title) if "《" in self.outline.title else subject
             text = f"现将《{name}》印发给你们，请结合实际认真组织实施。"
-        elif k in ("工作方案", "汇报材料", "调研报告", "讲话稿"):
+        elif k == "汇报材料":
+            core = re.sub(r"^关于|的汇报$", "", self.outline.title)
+            text = f"现将{core}汇报如下。"
+        elif k in ("工作方案", "讲话稿"):
             text = (purpose + "，" if purpose else "") + (f"根据{cites}，" if cites else "") + ("结合实际，制定本方案。" if k == "工作方案" else f"现就{subject}有关情况说明如下。")
         elif k in ("通告", "公告"):
             text = "，".join(p for p in [purpose, f"根据{cites}" if cites else ""] if p)
@@ -247,6 +288,9 @@ class Drafter:
             text = (text + "，" if text else "") + "现作出如下决定。"
         elif k == "工作总结":
             text = f"现将{subject}{'' if subject.endswith('情况') else '情况'}总结如下。"
+        elif k == "调研报告":
+            core = re.sub(r"^关于|的调研报告$", "", self.outline.title)
+            text = f"现将{core}调研情况报告如下。"
         else:
             verb = {"通知": "通知", "意见": "提出如下意见", "决定": "决定", "通报": "通报"}.get(k, "说明")
             text = "，".join(p for p in [purpose, f"根据{cites}" if cites else ""] if p)
@@ -257,15 +301,56 @@ class Drafter:
             refs.append(EvidenceRef(kind="task", id="subject", note="事由取自经确认的办文需求"))
         return self.para([self.sent(text, refs, "依据" if crefs else "背景")], self.outline.opening.para_id if self.outline.opening else None)
 
+    def order_paragraph(self, facts: list[Fact]) -> Block:
+        """命令（令）的公布语：“《××》已经××会议通过，现予公布，自××起施行。”——名称、审议会议与施行日期都取自材料，缺则待补。"""
+        text_all = " ".join([self.spec.request_text] + [f.statement for f in facts])
+        name = re.search(r"《([^》]{2,60})》", text_all)
+        passed = re.search(r"(已经|经)(\d{4}年\d{1,2}月\d{1,2}日)?([^，。；]{0,30}?会议)(审议|讨论)?通过", text_all)
+        eff = re.search(r"自(\d{4}年\d{1,2}月\d{1,2}日|公布之日|发布之日)起施行", text_all)
+        name_s = f"《{name.group(1)}》" if name else self.placeholder("order_name", "所公布的法规规章名称")
+        passed_s = f"已经{passed.group(2) or ''}{passed.group(3)}{passed.group(4) or ''}通过" if passed else self.placeholder("order_passed", "审议通过的会议名称和日期")
+        eff_s = eff.group(1) if eff else self.placeholder("order_effective", "施行日期")
+        refs = [EvidenceRef(kind="fact", id=f.fact_id) for f in facts if any(x and x.group(0) in f.statement for x in (passed, eff))]
+        return self.para([self.sent(f"{name_s}{passed_s}，现予公布，自{eff_s}起施行。", refs, "措施")])
+
+    def resolution_note(self) -> str:
+        """决议题注：“（××年×月×日××会议通过）”，日期与会议名称取自材料，缺则待补。"""
+        texts = [f.statement for f in self.ledger.facts] + ([u.text for u in self.bundle.units] if self.bundle else [])
+        for t in texts:
+            d = re.search(r"\d{4}年\d{1,2}月\d{1,2}日", t)
+            m = _MEETING_NAME.search(t)
+            if d and m:
+                return f"（{d.group(0)}{m.group(1)}通过）"
+        return "（" + self.placeholder("resolution_note", "通过日期和会议名称") + "通过）"
+
     def body(self) -> list[Block]:
         blocks: list[Block] = []
         n = 0
-        is_letter = self.doc_kind in ("函", "批复", "通报", "决定", "通告", "公告")  # 篇幅短的文种一般不设层次标题
+        is_letter = self.doc_kind in ("函", "批复", "通报", "决定", "通告", "公告", "决议", "命令（令）", "公报", "议案", "简报", "管理办法") or self.outline.variant in ("任免", "转发")  # 篇幅短的文种一般不设层次标题
         for sec in self.outline.sections:
             content: list[Block] = []
             for p in sec.paragraphs:
-                sents = self.fact_sentences(self.facts_of(p), p.function)
-                for mid in p.measure_ids:
+                if self.doc_kind == "命令（令）" and sec.role == "matter":
+                    content.append(self.order_paragraph(self.facts_of(p)))
+                    continue
+                if sec.role in ("m_time", "m_place", "m_people", "m_agenda"):
+                    # 会议通知各项：只写事项内容（“会议时间：”已由标题说明）
+                    sents = [self.sent(norm_sentence(re.sub(r"^[^：:]{2,6}[：:]\s*", "", f.statement)), [EvidenceRef(kind="fact", id=f.fact_id)], p.function) for f in self.facts_of(p)]
+                else:
+                    sents = self.fact_sentences(self.facts_of(p), p.function)
+                if self.doc_kind in ("管理办法", "工作要点") and p.measure_ids:
+                    # 办法按条、要点按项分段，内容照材料原句，不增删
+                    for mid in p.measure_ids:
+                        m = self.outline.measure(mid)
+                        if m:
+                            self.item_no += 1
+                            label = f"第{_cn_ordinal(self.item_no)}条　" if self.doc_kind == "管理办法" else f"（{_cn_ordinal(self.item_no)}）"
+                            ms = self.measure_sentence(m)
+                            ms.text = label + ms.text
+                            content.append(self.para([ms], p.para_id))
+                    if not sents:
+                        continue
+                for mid in ([] if self.doc_kind in ("管理办法", "工作要点") else p.measure_ids):
                     m = self.outline.measure(mid)
                     if m:
                         sents.append(self.measure_sentence(m))
@@ -274,10 +359,21 @@ class Drafter:
                 if not sents:
                     gi_ = kb.genre(self.doc_kind)
                     required = {c["key"] for c in (gi_.contract if gi_ else []) if c.get("required")}
-                    if sec.role == "answer":
+                    if sec.role == "appoint":
+                        sents = [self.sent(self.placeholder("appoint", "任免事项（须依据真实任免决定）"), [], "措施")]
+                    elif sec.role == "decisions" and self.doc_kind == "决议":
+                        sents = [self.sent(self.placeholder("decisions", "决议事项（须为会议讨论通过的内容）"), [], "措施")]
+                    elif sec.role in ("m_time", "m_place", "m_people"):
+                        sents = [self.sent(self.placeholder(sec.role, f"{sec.heading}（材料中未提供）"), [], "事实")]
+                    elif sec.role in ("m_agenda", "situation", "content", "reason", "work", "articles") and self.doc_kind in ("决议", "公报", "简报", "议案", "讲话稿", "管理办法", "通知"):
+                        if sec.role in ("content", "articles", "reason"):
+                            sents = [self.sent(self.placeholder(sec.role, f"{sec.heading or '主要内容'}（材料中未提供，系统不代为撰写）"), [], p.function)]
+                        else:
+                            continue
+                    elif sec.role == "answer":
                         # 批复的答复意见只能来自真实决定（会议议定、审批意见），系统不代为决定是否同意
                         sents = [self.sent(self.placeholder("answer", "答复意见（须依据真实审批决定，系统不代为决定是否同意）"), [], "措施")]
-                    elif sec.role in ("requirements",) and self.doc_kind in ("批复", "通报", "决定", "通告", "意见"):
+                    elif sec.role in ("requirements",) and (self.doc_kind in ("批复", "通报", "决定", "通告", "意见", "决议", "讲话稿", "工作要点") or self.outline.variant in ("转发", "会议")):
                         continue  # 这些文种的执行要求为可选：材料中没有就不写，不留泛泛的待补
                     elif sec.role == "verdict":
                         if re.search(r"表彰|表扬|批评", self.spec.request_text):
@@ -385,29 +481,42 @@ class Drafter:
 
     def build(self) -> DocumentIR:
         g = self.genre
+        k = self.doc_kind
+        issuing = bool(g.material_type and g.suggested_genre == "通知")
         fmt = g.format_type if g.suggested_genre else "general"
-        organ_mark = ""
-        if self.issuer:
-            organ_mark = self.issuer if fmt == "letter" else (f"{self.issuer}文件" if fmt == "general" else self.issuer)
+        if g.material_type and not issuing:
+            # 事务文书不是红头文件：不设版头、版记；简报用简报报头
+            fmt = "brief" if k == "简报" else "plain"
+        issuer = self.issuer or ""
+        organ_mark = {"letter": issuer, "general": f"{issuer}文件" if issuer else "", "command": f"{issuer}令" if issuer else "", "brief": "工作简报", "plain": ""}.get(fmt, issuer)
         if fmt == "jiyao":
-            organ_mark = f"{self.issuer or ''}会议纪要" if self.issuer else "【待补：会议名称】纪要"
+            organ_mark = f"{issuer}会议纪要" if issuer else "【待补：会议名称】纪要"
+        header = Header(organ_mark=organ_mark)
+        if fmt == "command":
+            header.doc_number = "第【待编号：令号由办理流程确定】号"
+        elif fmt == "brief":
+            header.doc_number = "第【待编号：期号由办理流程确定】期"
+        elif fmt == "plain":
+            header.doc_number = ""
         recips = []
         if self.spec.recipients.known:
             recips = [r.get("name") if isinstance(r, dict) else str(r) for r in self.spec.recipients.value]
-        if not recips and self.doc_kind not in ("纪要", "公告", "通告", "公报", "工作方案", "讲话稿", "汇报材料", "工作总结", "调研报告"):
+        if not recips and k not in NO_RECIPIENTS:
             recips = [self.placeholder("recipients", "主送机关")]
-        issuing = bool(g.material_type and g.suggested_genre == "通知")
+        if k in ("决议", "命令（令）", "公报", "讲话稿", "简报"):
+            recips = []  # 公布性文种与讲话、简报不设主送机关
         body = self.body()
+        opening = self.opening()
         # 印发类通知：通知正文只说明印发事项，所印发的方案作为附件（条例第八条：事务材料由法定文种印发）
-        blocks = [self.opening()] + ([] if issuing else body)
-        if self.doc_kind == "请示" and not any(s.function == "请求" for b in blocks for s in b.sentences):
+        blocks = ([opening] if opening else []) + ([] if issuing else body)
+        if k == "请示" and not any(s.function == "请求" for b in blocks for s in b.sentences):
             blocks.append(self.para(self.resource_request_sentences() or [self.sent(self.placeholder("request", "请示事项（请求批准或指示的具体内容）"), [], "请求")]))
         c = self.closing()
         if c and not issuing:
             blocks.append(c)
         notes, atts = self.attachments()
         attendees = {}
-        if self.doc_kind == "纪要":
+        if k == "纪要":
             # 出席、请假、列席名单照会议记录列出（GB/T 9704—2012 10.3：纪要格式可根据实际制定）
             for f in self.ledger.facts:
                 for key in ("出席", "请假", "列席"):
@@ -417,6 +526,34 @@ class Drafter:
             name = re.sub(r"^.*?关于印发《(.+)》的通知$", r"\1", self.outline.title) if "《" in self.outline.title else f"{self.spec.subject.value}{g.material_type}"
             notes = [AttachmentNote(seq=1, name=name)] + [AttachmentNote(seq=n.seq + 1, name=n.name) for n in notes]
             atts = [Attachment(seq=1, title=name, blocks=body)] + [Attachment(seq=a.seq + 1, title=a.title, blocks=a.blocks) for a in atts]
+        inc = find_incoming(self.bundle, forwarding=True) if self.outline.variant == "转发" else None
+        if inc is not None:
+            # 转发的上级来文照原文附后（来文正文取自材料，不改写）
+            lines = [u for u in self.bundle.units if u.material_id == inc.material_id and u.kind not in ("comment", "table_cell", "sheet_cell")]
+            texts = [u.text.strip() for u in lines]
+            start = texts.index(inc.title) + 1 if inc.title in texts else 0
+            skip = {inc.doc_number}
+            att_blocks = [self.para([self.sent(t, [EvidenceRef(kind="material", id=inc.material_id, note="来文")], "依据")]) for t in texts[start:] if t and t not in skip]
+            notes = [AttachmentNote(seq=1, name=inc.title)] + [AttachmentNote(seq=n.seq + 1, name=n.name) for n in notes]
+            atts = [Attachment(seq=1, title=inc.title, blocks=att_blocks)] + [Attachment(seq=a.seq + 1, title=a.title, blocks=a.blocks) for a in atts]
+        if k in ("命令（令）", "议案"):
+            # 令、议案由政府主要负责人签署（7.3.5.3 加盖签发人签名章）
+            signature = Signature(organs=[issuer or "【待确认发文机关】"], seal_mode="signature_stamp", signer_title=gov_head(issuer))
+        elif k in ("决议", "公报", "讲话稿", "简报"):
+            signature = Signature(organs=[], seal_mode="none", date="")
+        else:
+            signature = Signature(organs=[issuer or "【待确认发文机关】"], seal_mode="no_seal" if fmt in ("jiyao", "plain") else "seal")
+        title_note, salutation = "", ""
+        if k == "决议":
+            title_note = self.resolution_note()
+        elif k == "公报":
+            title_note = f"（{issuer or self.placeholder('bulletin_issuer', '发布机关')}　{self.placeholder('bulletin_date', '发布日期')}）"
+        elif k == "讲话稿":
+            m = re.match(r"^(.*?)在.+?上", str(self.spec.subject.value or ""))
+            speaker = (m.group(1) if m else "") or self.placeholder("speaker_title", "讲话人职务")
+            title_note = f"{speaker}　{self.placeholder('speaker', '讲话人姓名')}"
+            salutation = "同志们："
+        no_imprint = fmt in ("plain", "brief") or k in ("决议", "公报", "命令（令）")
         ir = DocumentIR(
             doc_id=self.doc_id,
             matter_id=self.matter_id,
@@ -424,19 +561,23 @@ class Drafter:
             material_type=g.material_type,
             format_type=fmt,
             direction=g.direction,
-            header=Header(organ_mark=organ_mark),
+            header=header,
             title=self.outline.title,
+            title_note=title_note,
+            salutation=salutation,
             recipients=recips,
             blocks=blocks,
             attachment_notes=notes,
             attachments=atts,
             attendees=attendees,
-            signature=Signature(organs=[self.issuer or "【待确认发文机关】"], seal_mode="no_seal" if fmt == "jiyao" or (g.material_type and not issuing) else "seal"),
-            note="联系人：【待补】，联系电话：【待补】" if g.direction == "上行文" else "",
-            imprint=Imprint(cc=[r.get("name") if isinstance(r, dict) else str(r) for r in (self.spec.cc.value or [])] if self.spec.cc.known else [], printer="【待确认印发机关】"),
-            placeholders=self.placeholders + [Placeholder(field="header.doc_number", reason="发文字号由办理流程确定"), Placeholder(field="signature.date", reason="成文日期为负责人签发日期")],
+            signature=signature,
+            note="联系人：【待补】，联系电话：【待补】" if g.direction == "上行文" and k in ("请示", "报告", "意见") else "",
+            imprint=Imprint(cc=[r.get("name") if isinstance(r, dict) else str(r) for r in (self.spec.cc.value or [])] if self.spec.cc.known else [], printer="" if no_imprint else "【待确认印发机关】", print_date="" if no_imprint else "【待印发时填写】"),
+            placeholders=self.placeholders
+            + ([Placeholder(field="header.doc_number", reason="发文字号（令号、期号）由办理流程确定")] if header.doc_number else [])
+            + ([Placeholder(field="signature.date", reason="成文日期为负责人签发日期")] if signature.date else []),
         )
-        if g.direction == "上行文":
+        if g.direction == "上行文" and k in ("请示", "报告", "意见", "议案"):
             ir.placeholders.append(Placeholder(field="header.signers", reason="上行文签发人由真实签发流程确定"))
         return ir
 

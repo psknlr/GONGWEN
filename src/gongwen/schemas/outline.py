@@ -62,6 +62,7 @@ class OutlinePlan(GWModel):
     genre: str | None
     material_type: str | None = None
     title: str
+    variant: str = Field(default="", description="文种的常见变体：转发、会议、任免（通知）等")
     sections: list[SectionPlan] = Field(default_factory=list)
     opening: ParagraphPlan | None = None
     closing: ParagraphPlan | None = None

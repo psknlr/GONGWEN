@@ -89,7 +89,12 @@ def render_document(ir: DocumentIR, flags: dict[str, str] | None = None, label: 
         else:
             parts.append(f'<div class="docno"><span>{esc(doc_number)}</span></div>')
     issuer = ir.signature.organs[0] if ir.signature.organs else ""
-    parts.append('<div class="title">' + "<br>".join(esc(x) for x in split_title(ir.title, 20, issuer)) + "</div>")
+    if ir.title:
+        parts.append('<div class="title">' + "<br>".join(esc(x) for x in split_title(ir.title, 20, issuer)) + "</div>")
+    if ir.title_note:
+        parts.append(f'<p class="flush" style="text-align:center;font-family:KaiTi,楷体,serif">{esc(ir.title_note)}</p>')
+    if ir.salutation:
+        parts.append(f'<p class="flush">{esc(ir.salutation)}</p>')
     if ir.recipients:
         parts.append(f'<p class="flush">{esc("、".join(ir.recipients))}：</p>')
     parts.append(_blocks(ir.blocks, flags))
@@ -99,7 +104,10 @@ def render_document(ir: DocumentIR, flags: dict[str, str] | None = None, label: 
     if ir.attendees:
         for k, v in ir.attendees.items():
             parts.append(f'<p><b>{esc(k)}：</b>{esc("、".join(v))}</p>')
-    parts.append('<div class="sig">' + "".join(f"<div>{esc(o)}</div>" for o in ir.signature.organs) + f"<div>{esc(ir.signature.date)}</div></div>")
+    if ir.signature.seal_mode == "signature_stamp":
+        parts.append(f'<div class="sig"><div>{esc(ir.signature.signer_title or "【待补：签发人职务】")}　　【签名章】</div><div>{esc(ir.signature.date)}</div></div>')
+    elif ir.signature.seal_mode != "none":
+        parts.append('<div class="sig">' + "".join(f"<div>{esc(o)}</div>" for o in ir.signature.organs) + f"<div>{esc(ir.signature.date)}</div></div>")
     if ir.note:
         parts.append(f'<p class="note">（{esc(ir.note.strip("（）"))}）</p>')
     single = len(ir.attachments) == 1 and len(ir.attachment_notes) <= 1

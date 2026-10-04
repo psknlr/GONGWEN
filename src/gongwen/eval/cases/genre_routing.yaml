@@ -618,3 +618,361 @@
       会议议定事项: [会议同意2026年新建示范点12个]
       待研究事项: [会议未作决定]
     draft_not_contains: ["9:00"]
+
+# ---- 全部法定文种与常见变体
+- id: GR-32
+  task_group: single
+  kind: pipeline
+  title: 决议：题注写明通过日期和会议名称（取自材料），正文只写会议审查情况与决议事项，不设主送与落款
+  request: 起草一份示例市人民代表大会关于批准2026年市级预算的决议
+  hints: {issuer_type: 人大}
+  env: {unit_name: 示例市人民代表大会}
+  materials:
+    - name: 会议情况.md
+      text: |
+        示例市第十七届人民代表大会第五次会议于2026年3月10日审查了市人民政府提出的2026年市级预算草案和市财政局受市人民政府委托所作的报告。
+
+        会议同意市人民代表大会财政经济委员会的审查结果报告，决定批准2026年市级预算。
+  accept: [task_confirm, outline_confirm]
+  expect:
+    stage: 人工送审
+    genre: 决议
+    draft_contains: [示例市人民代表大会关于批准2026年市级预算的决议, （2026年3月10日示例市第十七届人民代表大会第五次会议通过）, 决定批准2026年市级预算]
+    draft_not_contains: [【待补：主送机关, 关于示例市人民代表大会, 请示]
+
+- id: GR-33
+  task_group: single
+  kind: pipeline
+  title: 命令（令）：令号与签发人签名章，不设标题；公布语中的名称、审议会议与施行日期取自材料
+  request: 起草一份公布《示例市基层医疗机构管理办法》的市政府令
+  hints: {issuer_type: 人民政府}
+  env: {unit_name: 示例市人民政府}
+  materials:
+    - name: 审议情况.md
+      text: |
+        《示例市基层医疗机构管理办法》已经2026年3月1日市人民政府第20次常务会议通过，自2026年5月1日起施行。
+  accept: [task_confirm, outline_confirm]
+  expect:
+    stage: 人工送审
+    genre: 命令（令）
+    draft_contains: [《示例市基层医疗机构管理办法》已经2026年3月1日市人民政府第20次常务会议通过，现予公布，自2026年5月1日起施行, 市长　【签名章】]
+    draft_not_contains: [关于公布, 本令自公布之日起施行, 【待补：主送机关]
+
+- id: GR-34
+  task_group: adversarial
+  kind: pipeline
+  title: 政府部门以本部门名义发布命令（令）→ 超出权限，提示改用通知、通告
+  request: 起草一份发布基层医疗机构管理规定的命令
+  hints: {issuer_type: 政府部门}
+  env: {unit_name: 示例市卫生健康委员会}
+  materials:
+    - name: 说明.md
+      text: |
+        拟对基层医疗机构管理作出规定。
+  accept: [task_confirm]
+  expect:
+    stage: 超出权限
+    authority_codes: [ORDER_ISSUER]
+
+- id: GR-35
+  task_group: single
+  kind: pipeline
+  title: 公报（统计公报）：标题不加“关于”，题注写发布机关，照材料陈述数据，不设主送机关
+  request: 起草2025年示例市卫生健康事业发展统计公报
+  hints: {issuer_type: 政府部门}
+  materials:
+    - name: 统计数据.md
+      text: |
+        2025年末全市共有医疗卫生机构1520个，其中医院86个、基层医疗卫生机构1380个。
+
+        全市卫生技术人员2.1万人，比上年增长3.5%。
+  accept: [task_confirm, outline_confirm]
+  expect:
+    stage: 人工送审
+    genre: 公报
+    draft_contains: [2025年示例市卫生健康事业发展统计公报, 全市卫生技术人员2.1万人]
+    draft_not_contains: [关于2025年, 现就, 【待补：主送机关]
+    numbers_sourced: true
+
+- id: GR-36
+  task_group: single
+  kind: pipeline
+  title: 议案：人民政府向同级人大常委会提请审议，“现提请审议。”，由市长签署
+  request: 起草一份提请市人大常委会审议《示例市基层医疗卫生服务条例（草案）》的议案
+  hints: {recipients: 示例市人民代表大会常务委员会, issuer_type: 人民政府}
+  env: {unit_name: 示例市人民政府}
+  materials:
+    - name: 起草情况.md
+      text: |
+        为规范基层医疗卫生服务，市卫生健康委员会起草了《示例市基层医疗卫生服务条例（草案）》。
+
+        该草案已经2026年4月10日市人民政府第25次常务会议讨论通过。
+  accept: [task_confirm, outline_confirm]
+  expect:
+    stage: 人工送审
+    genre: 议案
+    draft_contains: [示例市人民代表大会常务委员会, 已经2026年4月10日市人民政府第25次常务会议讨论通过, 现提请审议, 市长　【签名章】]
+    rules_absent_open: [GW-BASIS-001]
+
+- id: GR-37
+  task_group: adversarial
+  kind: pipeline
+  title: 政府部门以本部门名义提出议案 → 超出权限（议案只能由人民政府提请）
+  request: 起草一份提请市人大常委会审议条例草案的议案
+  hints: {recipients: 示例市人民代表大会常务委员会, issuer_type: 政府部门}
+  env: {unit_name: 示例市卫生健康委员会}
+  materials:
+    - name: 起草情况.md
+      text: |
+        我委起草了《示例市基层医疗卫生服务条例（草案）》。
+  accept: [task_confirm]
+  expect:
+    stage: 超出权限
+    authority_codes: [MOTION_ISSUER]
+
+- id: GR-38
+  task_group: multi
+  kind: pipeline
+  title: 转发类通知：标题“××转发××关于××的通知”，引用来文标题与文号，来文附后，本机关要求单列，来文要求不写成本机关的话
+  request: 起草一份转发省卫生健康委关于做好基层医疗示范点建设工作的通知的通知
+  hints: {recipients: 各区卫生健康局, issuer_type: 政府部门}
+  materials:
+    - name: 上级来文.txt
+      text: |
+        示例省卫生健康委员会关于做好基层医疗示范点建设工作的通知
+        示省卫发〔2026〕12号
+        各设区市卫生健康委：
+        请各地于2026年6月30日前完成示范点选址。
+        示例省卫生健康委员会
+        2026年2月20日
+    - name: 本市要求.md
+      text: |
+        各区卫生健康局要于2026年5月31日前报送选址方案。
+  accept: [task_confirm, outline_confirm]
+  expect:
+    stage: 人工送审
+    genre: 通知
+    draft_contains: [示例市卫生健康委员会转发示例省卫生健康委员会关于做好基层医疗示范点建设工作的通知, 现将《示例省卫生健康委员会关于做好基层医疗示范点建设工作的通知》（示省卫发〔2026〕12号）转发给你们, 各区卫生健康局要于2026年5月31日前报送选址方案]
+    attachment_text_contains: [请各地于2026年6月30日前完成示范点选址]
+    draft_not_contains: [的通知的通知]
+    rules_absent_open: [GW-SEC-002]
+
+- id: GR-39
+  task_group: single
+  kind: pipeline
+  title: 会议通知：时间、地点、参会人员、有关要求分项写明，取自材料，不补写议程
+  request: 起草一份召开2026年基层医疗示范点建设推进会的通知
+  hints: {recipients: 各区卫生健康局, issuer_type: 政府部门}
+  materials:
+    - name: 会议安排.md
+      text: |
+        会议时间：2026年4月15日上午9:00。
+
+        会议地点：市卫生健康委3楼会议室。
+
+        参会人员：各区卫生健康局分管负责同志、基层卫生科负责同志。
+
+        请各区于2026年4月12日前报送参会人员名单，联系人：张某，电话：0000-12345678。
+  accept: [task_confirm, outline_confirm]
+  expect:
+    stage: 人工送审
+    section_contains:
+      会议时间: [2026年4月15日上午]
+      会议地点: [市卫生健康委3楼会议室]
+      参会人员: [分管负责同志]
+      有关要求: [2026年4月12日前报送参会人员名单]
+    draft_not_contains: [会议时间：2026, 主要任务]
+
+- id: GR-40
+  task_group: single
+  kind: pipeline
+  title: 任免通知：照录任免决定，不设层次标题；“研究决定”来自材料时提示核对原始决定，不阻断送审
+  request: 起草一份关于张某同志任职的通知
+  hints: {recipients: 委机关各处室、委属各单位, issuer_type: 政府部门}
+  materials:
+    - name: 任免决定.md
+      text: |
+        经2026年3月25日委党组会议研究决定：任命张某为基层卫生处处长，免去其规划发展处副处长职务。
+  accept: [task_confirm, outline_confirm]
+  expect:
+    stage: 人工送审
+    draft_contains: [任命张某为基层卫生处处长，免去其规划发展处副处长职务, 特此通知]
+    draft_not_contains: [一、, 【待补：主要任务]
+
+- id: GR-41
+  task_group: single
+  kind: pipeline
+  title: 询问函：用户明确要“函”时不改判为请示；事由去掉收文对象，开头“函询”，结束语“请函复”
+  request: 起草一份向市财政局询问示范点建设经费拨付进度的函
+  hints: {recipients: 示例市财政局, issuer_type: 政府部门}
+  materials:
+    - name: 情况.md
+      text: |
+        2026年拟新建示范点12个，所需经费120万元已列入2026年部门预算。
+  accept: [task_confirm, outline_confirm]
+  expect:
+    stage: 人工送审
+    genre: 函
+    draft_contains: [关于询问示范点建设经费拨付进度的函, 函询如下, 请函复]
+    draft_not_contains: [请予批准, 关于向市财政局]
+
+- id: GR-42
+  task_group: single
+  kind: pipeline
+  title: 上行意见：标题不带“提出关于”，结束语按上行
+  request: 起草一份向市政府提出关于加强基层医疗人才队伍建设的意见
+  hints: {recipients: 示例市人民政府, issuer_type: 政府部门}
+  materials:
+    - name: 情况.md
+      text: |
+        截至2025年底，全市基层医疗卫生机构人员缺口约1200人。
+
+        建议实施基层医疗人才定向培养计划，每年定向招收医学生200名。
+  accept: [task_confirm, outline_confirm]
+  expect:
+    stage: 人工送审
+    genre: 意见
+    draft_contains: [示例市卫生健康委员会关于加强基层医疗人才队伍建设的意见, 以上意见，如无不妥，请批转有关部门执行]
+    draft_not_contains: [提出关于, 请结合实际认真贯彻执行]
+
+- id: GR-43
+  task_group: single
+  kind: pipeline
+  title: 情况通报：尚未启动等问题事实照写，不遗漏
+  request: 起草一份关于2026年第一季度基层医疗示范点建设进展情况的通报
+  hints: {recipients: 各区卫生健康局, issuer_type: 政府部门}
+  materials:
+    - name: 进展.md
+      text: |
+        截至2026年3月31日，全市已完成示范点选址9个，占年度任务的75%。
+
+        甲区、乙区已全部完成选址。
+
+        丙区尚未启动选址工作。
+  accept: [task_confirm, outline_confirm]
+  expect:
+    stage: 人工送审
+    genre: 通报
+    draft_contains: [占年度任务的75%, 丙区尚未启动选址工作, 特此通报]
+
+- id: GR-44
+  task_group: single
+  kind: pipeline
+  title: 调研报告：调研方法、发现、原因、建议各归其位；不设版头与版记
+  request: 起草一份关于基层医疗示范点运行情况的调研报告
+  hints: {issuer_type: 政府部门}
+  materials:
+    - name: 调研记录.md
+      text: |
+        2026年3月，调研组赴5个区实地调研示范点8个。
+
+        调研发现，示范点日均诊疗人次较建设前提高30%。
+
+        部分示范点存在全科医生不足问题，主要原因是基层岗位吸引力不强。
+
+        建议完善基层医务人员激励机制。
+  accept: [task_confirm, outline_confirm]
+  expect:
+    stage: 人工送审
+    draft_contains: [关于基层医疗示范点运行情况的调研报告]
+    section_contains:
+      调研基本情况: [实地调研示范点8个]
+      主要发现: [提高30%]
+      原因分析: [主要原因是基层岗位吸引力不强]
+      对策建议: [建议完善基层医务人员激励机制]
+
+- id: GR-45
+  task_group: single
+  kind: pipeline
+  title: 讲话稿：标题“在××上的讲话”、讲话人题注、称呼“同志们：”，不设主送与落款
+  request: 起草委主任在2026年基层医疗示范点建设推进会上的讲话稿
+  hints: {issuer_type: 政府部门}
+  materials:
+    - name: 情况说明.md
+      text: |
+        截至2025年12月31日，我委已建成基层医疗示范点8个，覆盖5个区。
+
+        目前存在设备老化、服务能力不足等问题。
+
+        2026年拟新建示范点12个，计划于2026年12月底前完成建设。
+  accept: [task_confirm, outline_confirm]
+  expect:
+    stage: 人工送审
+    draft_contains: [在2026年基层医疗示范点建设推进会上的讲话, 委主任　【待补：讲话人姓名】, 同志们：]
+    draft_not_contains: [【待补：主送机关, 【待签发后填写成文日期】]
+
+- id: GR-46
+  task_group: single
+  kind: pipeline
+  title: 汇报材料：按事务材料办理（不改判为报告），标题“关于××的汇报”
+  request: 起草一份向市政府领导汇报基层医疗示范点建设情况的汇报材料
+  hints: {issuer_type: 政府部门}
+  materials:
+    - name: 情况说明.md
+      text: |
+        截至2025年12月31日，我委已建成基层医疗示范点8个，覆盖5个区。
+
+        目前存在设备老化、服务能力不足等问题。
+  accept: [task_confirm, outline_confirm]
+  expect:
+    stage: 人工送审
+    genre: 汇报材料
+    draft_contains: [关于基层医疗示范点建设情况的汇报, 现将基层医疗示范点建设情况汇报如下]
+    draft_not_contains: [特此报告, 签发人]
+
+- id: GR-47
+  task_group: single
+  kind: pipeline
+  title: 简报：简报报头与期号，标题去掉“一期”“工作简报”，正文照材料
+  request: 起草一期关于基层医疗示范点建设推进会召开情况的工作简报
+  hints: {issuer_type: 政府部门}
+  materials:
+    - name: 会议情况.md
+      text: |
+        2026年4月15日，市卫生健康委召开基层医疗示范点建设推进会。
+
+        会议通报了第一季度示范点建设进展情况，甲区、乙区作了交流发言。
+  accept: [task_confirm, outline_confirm]
+  expect:
+    stage: 人工送审
+    genre: 简报
+    draft_contains: [基层医疗示范点建设推进会召开情况, 甲区、乙区作了交流发言]
+    draft_not_contains: [一期, 【待补：主送机关]
+
+- id: GR-48
+  task_group: single
+  kind: pipeline
+  title: 工作要点：按项编号列出重点任务，照材料原句，不增设指标
+  request: 起草2026年基层卫生工作要点
+  hints: {issuer_type: 政府部门}
+  materials:
+    - name: 安排.md
+      text: |
+        2026年拟新建示范点12个。
+
+        各区要在2026年6月底前完成选址。
+  accept: [task_confirm, outline_confirm]
+  expect:
+    stage: 人工送审
+    genre: 工作要点
+    draft_contains: [2026年基层卫生工作要点, （一）2026年拟新建示范点12个, （二）各区要在2026年6月底前完成选址]
+
+- id: GR-49
+  task_group: single
+  kind: pipeline
+  title: 印发管理办法的通知：办法按条编排作为附件，条文照材料原句
+  request: 起草一份印发示例市基层医疗机构管理办法的通知
+  hints: {recipients: 各区卫生健康局, issuer_type: 政府部门}
+  materials:
+    - name: 办法要点.md
+      text: |
+        基层医疗机构应当按规定开展家庭医生签约服务。
+
+        各区卫生健康局负责辖区基层医疗机构的监督管理。
+  accept: [task_confirm, outline_confirm]
+  expect:
+    stage: 人工送审
+    genre: 通知
+    draft_contains: [关于印发《示例市基层医疗机构管理办法》的通知, 现将《示例市基层医疗机构管理办法》印发给你们]
+    attachment_text_contains: [第一条　基层医疗机构应当按规定开展家庭医生签约服务, 第二条　各区卫生健康局负责]
+    draft_not_contains: [管理办法管理办法]

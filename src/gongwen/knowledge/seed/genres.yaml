@@ -33,7 +33,7 @@ statutory:
     directions: [下行文, 公布性]
     subjects: [行政机关]
     format: command
-    closings: {preferred: [本令自公布之日起施行。], acceptable: [本令自发布之日起施行。]}
+    closings: {preferred: [], acceptable: [本令自公布之日起施行。, 本令自发布之日起施行。]}
     contract:
       - {key: matter, name: 公布或宣布事项, required: true}
       - {key: effective, name: 施行日期, required: true}
@@ -163,7 +163,7 @@ statutory:
     directions: [上行文]
     subjects: [人民政府]
     format: general
-    closings: {preferred: [请予审议。], acceptable: []}
+    closings: {preferred: [现提请审议。], acceptable: [请予审议。]}
     contract:
       - {key: reason, name: 提请审议事由, required: true}
       - {key: basis, name: 依据, required: true}
@@ -253,6 +253,18 @@ affairs:
       - {key: event, name: 事项, required: true}
       - {key: facts, name: 主要情况, required: true}
     risks: [未经核实即传播]
+  工作要点:
+    issue_vehicle: 通知（印发类）
+    contract:
+      - {key: overall, name: 总体要求, required: false}
+      - {key: tasks, name: 重点任务, required: true, functions: [措施]}
+      - {key: guarantee, name: 保障措施, required: false}
+    risks: [把拟议目标写成已定任务, 擅自增加指标]
+  管理办法:
+    issue_vehicle: 通知（印发类）
+    contract:
+      - {key: articles, name: 条款, required: true, functions: [措施]}
+    risks: [擅自增设权利义务与处罚, 规章制定程序缺失（合法性审核、集体审议）]
 
 # 事务材料名称 → 规范名称
 aliases:
@@ -268,5 +280,10 @@ aliases:
   讲话: 讲话稿
   发言稿: 讲话稿
   会议纪要: 纪要
+  要点: 工作要点
+  办法: 管理办法
+  实施细则: 管理办法
+  细则: 管理办法
+  管理制度: 管理办法
   命令: 命令（令）
   令: 命令（令）

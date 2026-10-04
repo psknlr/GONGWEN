@@ -45,6 +45,8 @@ def check_title(ctx: CheckContext) -> list[ReviewIssue]:
     title = ir.title.strip()
     bare = title.rstrip("。，；：！？.,;:!? ")  # 末尾标点另报 GW-FMT-009，不影响文种判断
     if not title:
+        if ir.format_type == "command":
+            return []  # 命令（令）格式不设标题（GB/T 9704—2012 10.2）
         return [ctx.issue("GW-GENRE-008", IssueType.REQUIRED_MISSING, "缺少标题", field_name="title")]
     if title[-1] in "。，；：！？.,;:":
         out.append(ctx.issue("GW-FMT-009", IssueType.FORMAT, "标题末尾不用标点符号", field_name="title", original=title, auto_fixable=True, fix_hint={"strip_end": title[-1]}))
@@ -65,7 +67,7 @@ def check_title(ctx: CheckContext) -> list[ReviewIssue]:
             organ = ctx.task.issuer.value
             name = organ.get("name") if isinstance(organ, dict) else str(organ)
             short = organ.get("short_name") if isinstance(organ, dict) else None
-            if name and name not in title and not (short and short in title) and ir.format_type != "jiyao":
+            if name and name not in title and not (short and short in title) and ir.format_type != "jiyao" and name not in ir.title_note and ir.genre not in ("公报", "决议"):
                 out.append(
                     ctx.issue(
                         "GW-GENRE-008",
@@ -251,6 +253,8 @@ def _looks_lower(organ: str, issuer: str) -> bool:
 def check_routing(ctx: CheckContext) -> list[ReviewIssue]:
     out: list[ReviewIssue] = []
     ir = ctx.ir
+    if ir.format_type == "plain":
+        return out  # 汇报材料、讲话稿等事务文书不是正式行文，不适用主送、签发人等行文规则
     leaders = [r for r in ir.recipients if LEADER_TITLE.search(r.strip())]
     if leaders and ctx.direction in ("上行文", "", "待核实") and not (ctx.genre and any(f.code == "TO_LEADER" for f in ctx.genre.authority_findings)):
         out.append(ctx.issue("GW-ROUTE-004", IssueType.ROUTING, f"主送“{'、'.join(leaders)}”为机关负责人：除上级机关负责人直接交办事项外，不得以本机关名义向上级机关负责人报送公文，应主送上级机关", field_name="recipients", original="、".join(ir.recipients), needs_human=True))

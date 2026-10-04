@@ -125,6 +125,17 @@ def layer_of(genre: str | None, text: str) -> str:
 
 def preliminary_genre(purposes: list[str], direction: str, requested: str | None) -> tuple[str | None, str]:
     P = Purpose
+    g = kb.genre(requested) if requested else None
+    # 用户明确要求的事务文书（汇报材料、讲话稿、工作要点等）：按事务材料办理；需正式下发的另由通知印发
+    if g is not None and not g.statutory and P.ISSUE_PLAN.value not in purposes:
+        return requested, "公务事务材料"
+    # 用户明确要求的法定文种：只在已知的误用情形下改判，其余按用户要求办理（文种与权限另行核对）
+    if g is not None and g.statutory and requested not in ("通知", "报告", "请示"):
+        if requested == "批复" and direction == Direction.PARALLEL.value:
+            return "函", "答复不相隶属机关的请求批准事项用函"
+        return requested, f"按用户要求的文种“{requested}”"
+    if requested == "请示" and direction == Direction.PARALLEL.value and P.APPROVE.value in purposes:
+        return "函", "不相隶属机关之间请求批准事项用函"
     if P.REPLY_LOWER.value in purposes:
         return "批复", "答复下级请示"
     if P.RECORD.value in purposes:
@@ -183,7 +194,7 @@ def extract_subject(text: str, genre: str | None) -> str:
     t = t.rstrip("的").strip()
     # “给××发函，商请……”“向××行文……”：收发文机关和行文动作不属于事由
     t = re.sub(r"^(给|向|致|对)[^，。]{1,30}?(发函|去函|致函|行文|发文|写信|去信|发个函|发一个函)[，,、]?", "", t)
-    t = re.sub(r"^(向[^，。]{1,20}?)(申请|请求|报告|汇报|提出|请示)", r"\2", t)
+    t = re.sub(r"^(向|给|对)[^，。]{1,20}?(申请|请求|报告|汇报|提出|请示|询问|咨询|商请|告知|征求)", r"\2", t)
     # “答复市政府关于××询问的报告”：事由是“××情况”，答复对象与“询问”不属于事由
     m = re.match(r"^(答复|回复)[^，。]{0,20}?关于(.+?)(的)?(询问|问询|有关问题|有关事项)?$", t)
     if m:
@@ -192,7 +203,9 @@ def extract_subject(text: str, genre: str | None) -> str:
         t = re.sub(r"^(报告|汇报)", "", t)
     elif genre == "请示":
         t = re.sub(r"^请示", "", t)
-    t = re.sub(r"^关于", "", t)
+    t = re.sub(r"^(提出|报送|呈报)?关于", "", t)
+    # 需求中带发文机关全称（“示例市人民代表大会关于……”）：机关名称另由发文主体给出，不属于事由
+    t = re.sub(r"^[一-鿿]{2,24}?(人民代表大会常务委员会|人民代表大会|人民政府办公厅|人民政府|委员会|办公厅|办公室|局|厅)关于", "", t)
     return t[:40] or "【待确认：事由】"
 
 

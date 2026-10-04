@@ -316,7 +316,22 @@ def check_approval_claims(ctx: CheckContext) -> list[ReviewIssue]:
         if re.search(r"(须|需|需要|应|应当|必须|要|报|报请|提请|待|拟)经?$", text[a : m.start()].strip()) or re.search(r"(须|需|应当?|必须|报请?|提请)经", text[a : m.end()]):
             continue  # “确需延期的，须经××批准”是程序要求，不是“已获批准”的陈述
         approved = [f for f in _facts_for(ctx, s) if f.status == FactStatus.APPROVED and f.approval_ref]
-        if not approved:
+        sourced = [f for f in _facts_for(ctx, s) if m.group(0) in f.statement]
+        if not approved and sourced and s.origin != "human":
+            # 表述原样来自材料（如任免决定、会议决定的记录）：不是起草时新增的批准表述，但材料记载不等于已核实的决定文件
+            out.append(
+                ctx.issue(
+                    "GW-SEM-006",
+                    IssueType.STATUS_UPGRADE,
+                    f"“{m.group(0)}”来自材料记载（{_source_excerpt(sourced[0])[:30]}），送审前须核对真实的决定或审批文件；需要写成已批准事项的，应导入审批记录",
+                    block=b,
+                    sentence=s,
+                    severity=Severity.MAJOR,
+                    evidence=[EvidenceRef(kind="fact", id=sourced[0].fact_id)],
+                    needs_human=True,
+                )
+            )
+        elif not approved:
             out.append(
                 ctx.issue(
                     "GW-SEM-006",

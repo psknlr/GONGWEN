@@ -35,9 +35,10 @@ _CALIBER_RE = re.compile(r"[（(]((?:不含|含|仅统计|仅含|按)[^）)]{1,3
 _TITLE_LIKE = re.compile(r"^(关于.{2,60}(说明|报告|请示|通知|方案|函|纪要|意见|汇报|总结|计划|测算表|明细表)|[^。！？；]{1,24})$")
 _SUBSTANTIVE = re.compile(
     r"(问题|不足|困难|短板|制约|隐患|滞后|缺口|原因|主要是|建立|开展|推进|实施|落实|组织|完善|建设|采购|购置|培训|改造|负责|牵头|要求|决定|议定|同意|^为"
-    r"|应当|必须|务必|须于|须在|要在|要于|确保|不得|严禁|完成|报送|提交|可以|鼓励|支持|提倡|引导)"
+    r"|应当|必须|务必|须于|须在|要在|要于|确保|不得|严禁|完成|报送|提交|可以|鼓励|支持|提倡|引导|尚未|未能|启动|任命|免去|聘任|起草|审议|审查|通过|调研|听取)"
 )
 _MEETING_UNDECIDED = re.compile(r"(未作决定|未作出决定|未决定|未议定|未形成(决定|意见|结论)|不同意|暂不|暂缓|待研究|再研究|另行研究|进一步研究|需进一步|会后研究|未达成一致)")
+_KV_LINE = re.compile(r"^(会议时间|会议地点|参会人员|参加人员|与会人员|参会范围|会议议程|会议内容|主要议程|报名时间|报名方式|联系人|联系电话)[：:]\s*(.+)$")
 _MEETING_INFO = re.compile(r"^(时间|地点|主持人|主持|出席|参加|列席|请假|缺席|记录人|记录)[：:]\s*(.+)$")
 _PROCESS_FIELDS = re.compile(r"(发文字号|文号|成文日期|签发人|印发日期|份号|落款日期)")
 
@@ -179,6 +180,13 @@ class FactLedgerSkill(Skill):
         return FactStatus.RECORDED, tags, verification
 
     def _text_facts(self, sc: SkillContext, ledger: FactLedger, u: SourceUnit, mat) -> None:
+        m_kv = _KV_LINE.match(u.text.strip())
+        if m_kv and not (mat is not None and mat.role == "meeting_record" and _MEETING_INFO.match(u.text.strip())):
+            # “会议时间：……”“联系人：……”等事项行：会议通知等按事项归入相应部分
+            loc = Locator(material_id=u.material_id, kind=u.kind, path=u.locator.path, excerpt=u.text[:80])
+            status, tags, ver = self._status_for(mat, Progress.NONE)
+            ledger.facts.append(Fact(fact_id=sc.ids.next("F"), statement=u.text.strip(), attribute=f"事项·{m_kv.group(1)}", kind="text", status=status, sources=[loc], verification=ver, tags=tags + [f"kv:{m_kv.group(1)}"]))
+            return
         m_info = _MEETING_INFO.match(u.text.strip())
         if m_info and mat is not None and mat.role == "meeting_record":
             # 会议记录的“时间、地点、主持人、出席、列席、请假”：纪要开头与出席名单的来源

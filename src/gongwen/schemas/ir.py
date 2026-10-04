@@ -106,6 +106,8 @@ class DocumentIR(GWModel):
     direction: str = ""
     header: Header = Field(default_factory=Header)
     title: str = ""
+    title_note: str = Field(default="", description="题注：标题下的括注，如决议的“（××年×月×日××会议通过）”")
+    salutation: str = Field(default="", description="称呼：讲话稿的“同志们：”等，不是主送机关")
     recipients: list[str] = Field(default_factory=list)
     blocks: list[Block] = Field(default_factory=list)
     attachment_notes: list[AttachmentNote] = Field(default_factory=list)
@@ -166,14 +168,18 @@ class DocumentIR(GWModel):
         return "\n".join(x for x in lines if x)
 
     def full_text(self) -> str:
-        parts = [self.title]
+        parts = [self.title, self.title_note, self.salutation]
         if self.recipients:
             parts.append("、".join(self.recipients) + "：")
         parts.append(self.body_text(include_attachments=False))
         if self.attachment_notes:
             parts.append("附件：" + "　".join(f"{n.seq}.{n.name}" if len(self.attachment_notes) > 1 else n.name for n in self.attachment_notes))
-        parts.extend(self.signature.organs)
-        parts.append(self.signature.date)
+        if self.signature.seal_mode == "signature_stamp":
+            parts.append(f"{self.signature.signer_title or '【待补：签发人职务】'}　【签名章】")
+        elif self.signature.seal_mode != "none":
+            parts.extend(self.signature.organs)
+        if self.signature.seal_mode != "none":
+            parts.append(self.signature.date)
         if self.note:
             parts.append(f"（{self.note}）")
         for att in self.attachments:
@@ -183,7 +189,11 @@ class DocumentIR(GWModel):
         return "\n".join(p for p in parts if p)
 
     def to_markdown(self) -> str:
-        out = [f"# {self.title}", ""]
+        out = [f"# {self.title}", ""] if self.title else []
+        if self.title_note:
+            out += [self.title_note, ""]
+        if self.salutation:
+            out += [self.salutation, ""]
         if self.recipients:
             out += ["、".join(self.recipients) + "：", ""]
         for _, b in self.iter_blocks(include_attachments=False):
@@ -196,7 +206,10 @@ class DocumentIR(GWModel):
                 out += [b.text(), ""]
         if self.attachment_notes:
             out += ["附件：" + "；".join(f"{n.seq}.{n.name}" if len(self.attachment_notes) > 1 else n.name for n in self.attachment_notes), ""]
-        out += [*self.signature.organs, self.signature.date, ""]
+        if self.signature.seal_mode == "signature_stamp":
+            out += [f"{self.signature.signer_title or '【待补：签发人职务】'}　【签名章】", self.signature.date, ""]
+        elif self.signature.seal_mode != "none":
+            out += [*self.signature.organs, self.signature.date, ""]
         if self.note:
             out += [f"（{self.note}）", ""]
         if self.imprint.main_moved:

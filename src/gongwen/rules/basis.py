@@ -46,6 +46,8 @@ def check_citations(ctx: CheckContext) -> list[ReviewIssue]:
             out.append(ctx.issue("GW-BASIS-004", IssueType.CITATION_FORMAT, "引用公文应先引标题、后引发文字号，如《××关于××的通知》（××〔2026〕5号）", block=b, sentence=s))
         policy_refs = [r for r in s.refs if r.kind == "policy"]
         titles = [t for t in find_titles(s.text) if t not in own_titles]
+        if re.search(r"现予公布|提请审议|起草了|现将《[^》]+》(印发|转发|批转)", s.text):
+            titles = []  # 令所公布、议案所提请审议、通知所印发转发的文件是本文的对象，不是行文依据
         numbers = find_doc_numbers(s.text)
         # 批复、复函引用的来文（“你委《××的请示》（××〔2026〕5号）收悉”）以材料为证，不是政策依据
         incoming = [ctx.sources.text_of(r.id) for r in s.refs if r.kind == "material" and r.note == "来文"] if ctx.sources else []

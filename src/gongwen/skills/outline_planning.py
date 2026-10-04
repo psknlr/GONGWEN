@@ -31,7 +31,7 @@ EXCEPTION_RE = re.compile(r"(除[^，。；]{1,30}外)")
 SUBJECT_RE = re.compile(r"^([一-鿿]{2,20}?(?:委员会|局|厅|办公室|处|科|中心|医院|学院|大学|部门|单位|各[一-鿿]{1,6}))(?:负责|牵头|要|应|将|拟|按照|组织)")
 # 要求与授权性措施（“可以结合实际……”“鼓励……”也是措施，不能因没有“要”“须”而丢失）
 REQUIREMENT_RE = re.compile(r"(负责|牵头|(?<![主重需])要(?![素点])|应当|须|必须|务必|请各|责任单位|可以|鼓励|支持|提倡|引导|原则上)")
-MEASURE_ROLES = ("proposal", "plans", "items", "tasks", "next", "goal", "suggestions", "division", "schedule", "opinions")
+MEASURE_ROLES = ("proposal", "plans", "items", "tasks", "next", "goal", "suggestions", "division", "schedule", "opinions", "articles")
 RESULT_CUES = re.compile(r"(提升|提高|增长|增加|下降|减少|缩短|达到|实现|覆盖|成效|改善|好转|获评|获得)")
 DECISION_CUES = re.compile(r"(研究决定|决定|议定|同意|予以|给予|命名|授予|通报表彰|通报批评)")
 DIVISION_RE = re.compile(r"(负责|牵头|配合|协助|分工|责任单位)")
@@ -52,11 +52,47 @@ GENRE_SECTIONS: dict[str, list[tuple[str, str, str]]] = {
     "通告": [("basis", "", "依据"), ("items", "", "措施"), ("requirements", "", "要求")],
     "公告": [("matter", "", "措施")],
     "意见": [("background", "", "背景"), ("opinions", "主要措施", "措施"), ("requirements", "组织实施", "要求")],
+    "决议": [("situation", "", "事实"), ("decisions", "", "措施"), ("requirements", "", "要求")],
+    "命令（令）": [("matter", "", "措施")],
+    "公报": [("content", "", "事实")],
+    "议案": [("reason", "", "事实")],
+    "讲话稿": [("work", "关于前一阶段工作", "事实"), ("problems", "关于存在的问题", "分析"), ("next", "关于下一步重点工作", "措施"), ("requirements", "关于工作要求", "要求")],
+    "简报": [("content", "", "事实")],
+    "工作要点": [("tasks", "重点任务", "措施"), ("requirements", "工作要求", "要求")],
+    "管理办法": [("articles", "", "措施")],
     "工作方案": [("goal", "工作目标", "措施"), ("scope", "工作范围", "事实"), ("tasks", "主要任务", "措施"), ("division", "职责分工", "措施"), ("schedule", "进度安排", "措施"), ("resources", "保障措施", "措施"), ("evaluation", "评价方式", "要求")],
     "汇报材料": [("overview", "基本情况", "事实"), ("work", "主要工作和成效", "事实"), ("problems", "存在问题", "分析"), ("next", "下一步打算", "措施")],
     "工作总结": [("work", "主要工作", "事实"), ("results", "取得的成效", "事实"), ("problems", "问题与不足", "分析"), ("next", "下一步打算", "措施")],
     "调研报告": [("method", "调研基本情况", "事实"), ("findings", "主要发现", "事实"), ("analysis", "原因分析", "分析"), ("suggestions", "对策建议", "措施")],
 }
+# 文种的常见变体：内容结构与一般写法不同
+VARIANT_SECTIONS: dict[str, list[tuple[str, str, str]]] = {
+    "会议": [("m_time", "会议时间", "事实"), ("m_place", "会议地点", "事实"), ("m_people", "参会人员", "事实"), ("m_agenda", "会议内容", "事实"), ("requirements", "有关要求", "要求")],
+    "任免": [("appoint", "", "措施")],
+    "转发": [("requirements", "", "要求")],
+}
+KV_KEYS = {
+    "m_time": ("会议时间", "时间"),
+    "m_place": ("会议地点", "地点"),
+    "m_people": ("参会人员", "参加人员", "与会人员", "参会范围", "出席人员"),
+    "m_agenda": ("会议议程", "会议内容", "主要议程", "议程"),
+}
+APPOINT_RE = re.compile(r"任命|免去|聘任|聘为|任职|免职|兼任|试用期")
+
+
+def notice_variant(request: str, doc_kind: str) -> str:
+    """通知的常见变体：转发（批转）、会议、任免；其他文种返回空。"""
+    if doc_kind != "通知":
+        return ""
+    if re.search(r"转发|批转", request):
+        return "转发"
+    if re.search(r"任职|免职|任免|任命|聘任", request):
+        return "任免"
+    if re.search(r"(召开|举办|举行|参加)[^，。]{0,30}(会议|会|培训班|论坛)", request):
+        return "会议"
+    return ""
+
+
 BUDGETS = {"请示": 1200, "报告": 2000, "通知": 1500, "函": 600, "纪要": 1200, "工作方案": 2500, "批复": 500, "意见": 2500}
 
 
@@ -105,13 +141,15 @@ class OutlinePlanningSkill(Skill):
         gi = kb.genre(doc_kind)
         subject = str(spec.subject.value or "有关事项")
         issuer = spec.issuer.value.get("name") if spec.issuer.known and isinstance(spec.issuer.value, dict) else ""
-        incoming = find_incoming(bundle)
+        variant = notice_variant(spec.request_text, doc_kind)
+        incoming = find_incoming(bundle, forwarding=variant == "转发")
         reply = is_reply(spec.request_text, doc_kind) and incoming is not None
-        plan = OutlinePlan(genre=genre.suggested_genre, material_type=genre.material_type, title=self._title(issuer, subject, genre, incoming if reply else None))
+        forwarding = variant == "转发" and incoming is not None
+        plan = OutlinePlan(genre=genre.suggested_genre, material_type=genre.material_type, variant=variant, title=self._title(issuer, subject, genre, incoming if (reply or forwarding) else None, variant))
         plan.total_budget_chars = BUDGETS.get(doc_kind, 1500)
         usable = [f for f in ledger.facts if "example" not in f.tags and f.status not in (FactStatus.CONFLICT, FactStatus.UNKNOWN)]
-        if reply:
-            # 答复类文稿：来文自身的陈述（对方的请求、背景）不是本机关的事实，不写入答复内容
+        if reply or forwarding:
+            # 答复、转发类文稿：来文自身的陈述（对方的请求、背景、要求）不是本机关的事实，不写入本文正文
             usable = [f for f in usable if not any(s.material_id == incoming.material_id for s in f.sources)]
         planned = [f for f in usable if f.status == FactStatus.PROPOSED]
         current = [f for f in usable if f.status != FactStatus.PROPOSED]
@@ -123,7 +161,7 @@ class OutlinePlanningSkill(Skill):
         # ---- 措施表（来源：材料中的拟议/安排类陈述）
         seen_measure_text: set[str] = set()
         requirement_like = [f for f in current if REQUIREMENT_RE.search(f.statement) and f.progress not in (Progress.COMPLETED, Progress.ONGOING) and "table" not in f.tags and "computed" not in f.tags and "meeting_record" not in f.tags]
-        for f in planned + requirement_like:
+        for f in [x for x in planned + requirement_like if not any(t.startswith("kv:") for t in x.tags)]:
             if f.statement in seen_measure_text:
                 continue
             seen_measure_text.add(f.statement)
@@ -133,7 +171,7 @@ class OutlinePlanningSkill(Skill):
         # 作为措施来源的句子不再作为“情况”重复陈述
         measure_sources = {r.id for m in plan.measures for r in m.basis if r.kind == "fact"}
         done_or_ongoing = [f for f in done_or_ongoing if f.fact_id not in measure_sources]
-        sections = GENRE_SECTIONS.get(doc_kind) or [(c["key"], c["name"], (c.get("functions") or ["事实"])[0]) for c in (gi.contract if gi else [])]
+        sections = VARIANT_SECTIONS.get(variant) or GENRE_SECTIONS.get(doc_kind) or [(c["key"], c["name"], (c.get("functions") or ["事实"])[0]) for c in (gi.contract if gi else [])]
         assigned = self._distribute(plan.measures, [r for r, _, _ in sections])
         # ---- 开头段
         plan.opening = ParagraphPlan(
@@ -158,7 +196,36 @@ class OutlinePlanningSkill(Skill):
             sec = SectionPlan(section_id=sc.ids.next("S"), heading=heading, role=role)
             pick: list[Fact] = []
             measure_ids: list[str] = []
-            if role == "scope":
+            if role in KV_KEYS:
+                # 会议通知的时间、地点、人员、内容：取材料中“会议时间：……”等事项
+                pick = [f for f in usable if any(f"kv:{k}" in f.tags for k in KV_KEYS[role])][:3]
+            elif role == "appoint":
+                # 任免事项只取材料中的任免决定原文，不补写职务、时间
+                pick = [f for f in fresh(current) if APPOINT_RE.search(f.statement)][:6]
+                if not pick:
+                    plan.contract_missing.append("任免事项")
+                    plan.open_questions.append("材料中没有任免决定。任免事项须依据真实任免决定，请补充材料或人工填写。")
+            elif role == "content":
+                # 公报、简报：照材料陈述主要情况与数据
+                pick = [f for f in fresh(current) if "computed" not in f.tags][:12]
+            elif role == "reason":
+                # 议案：提请审议的事由（起草情况、政府审议情况）
+                pick = [f for f in fresh(usable) if "computed" not in f.tags][:8]
+            elif role == "method" and doc_kind == "调研报告":
+                pick = [f for f in fresh(done_or_ongoing) if re.search(r"调研|走访|座谈|问卷|实地|抽查|样本", f.statement) and not re.search(r"发现|显示|表明|反映", f.statement)][:4]
+            elif role == "findings" and doc_kind == "调研报告":
+                pick = [f for f in fresh(done_or_ongoing) if not re.search(r"建议|对策", f.statement)][:6]
+            elif role == "suggestions" and doc_kind == "调研报告":
+                pick = [f for f in fresh(usable) if re.search(r"建议|对策|应当|需要", f.statement)][:6]
+                measure_ids = assigned.get(role, [])[:8]
+            elif role == "decisions" and doc_kind == "决议":
+                pick = [f for f in fresh(usable) if "meeting:decided" in f.tags or (DECISION_CUES.search(f.statement) and f.status != FactStatus.PROPOSED)]
+                if not pick:
+                    plan.contract_missing.append("决议事项")
+                    plan.open_questions.append("材料中没有会议讨论通过的决议事项。决议只能写入会议讨论通过的内容，请补充会议记录或表决结果。")
+            elif role == "situation" and doc_kind == "决议":
+                pick = [f for f in fresh(done_or_ongoing) if not DECISION_CUES.search(f.statement)][:6]
+            elif role == "scope":
                 pick = [f for f in done_or_ongoing if re.search(r"范围|覆盖|对象|适用于|涉及", f.statement)][:4]
             elif role == "results":
                 # 成效：有成效表述的现状事实；与“主要工作”不重复
@@ -208,8 +275,13 @@ class OutlinePlanningSkill(Skill):
                 pick = meeting_situation
             elif role in ("requirements", "evaluation"):
                 # 执行要求：带时限、报送、联系人的要求性陈述；已完成或推进中的现状陈述不是要求
-                pick = [f for f in fresh(usable) if (DATE_RE.search(f.statement) or "报送" in f.statement or "联系人" in f.statement) and f.progress not in (Progress.COMPLETED, Progress.ONGOING) and "computed" not in f.tags and "table" not in f.tags]
+                pick = [f for f in fresh(usable) if (DATE_RE.search(f.statement) or "报送" in f.statement or "联系人" in f.statement) and f.progress not in (Progress.COMPLETED, Progress.ONGOING) and "computed" not in f.tags and "table" not in f.tags and not any(t.startswith("kv:") for t in f.tags)]
                 pick = pick[:4]
+                if variant in ("转发", "会议"):
+                    # 转发、会议通知没有“任务”章节：本机关提出的要求（材料中的要求性陈述）都列在这里
+                    measure_ids = [m.measure_id for m in plan.measures][:8]
+                    pick = [f for f in pick if f.fact_id not in {r.id for m in plan.measures for r in m.basis}]
+                    pick += [f for f in usable if "kv:联系人" in f.tags or "kv:联系电话" in f.tags or "kv:报名方式" in f.tags]
             if role == "matter":
                 # 函、公告：必要背景 + 商洽或公告事项；涉及经费时写明测算合计（明细见附件）
                 pick = (done_or_ongoing + planned)[:6] + [f for f in computed if f.kind == "money"][:1]
@@ -236,6 +308,13 @@ class OutlinePlanningSkill(Skill):
         closing_candidates = gi.closing_candidates(genre.direction, spec.purposes[0] if spec.purposes else None, include_acceptable=False) if gi else []
         if reply and doc_kind == "函":
             closing_candidates = ["特此函复。", "专此函复。"]  # 复函用“函复”，不用“请函复”
+        elif doc_kind == "函" and gi:
+            # 函的结束语按用途：询问用“请函复”，告知用“特此函告”，商洽用“请予支持为盼”，请求批准用“请予批准为盼”
+            purpose = next((p for p, rx in (("询问答复", r"询问|咨询|了解|函询"), ("告知", r"告知|函告|通报"), ("请求批准", r"申请|请求批准|审批|核准"), ("商洽工作", r"商请|协助|支持|配合|商洽")) if re.search(rx, spec.request_text)), None)
+            if purpose == "告知":
+                closing_candidates = ["特此函告。"]
+            elif purpose:
+                closing_candidates = gi.closing_candidates(genre.direction, purpose, include_acceptable=False)
         plan.closing = ParagraphPlan(para_id=sc.ids.next("PP"), function="结语" if doc_kind != "请示" else "请求", purpose="结束语", core=closing_candidates[0] if closing_candidates else "", budget_chars=30)
         if doc_kind == "请示" and not money and spec.resource_mentions:
             plan.open_questions.append("请明确请示事项：申请金额、资金来源与用途。")
@@ -281,8 +360,34 @@ class OutlinePlanningSkill(Skill):
         return out
 
     @staticmethod
-    def _title(issuer: str, subject: str, genre: GenreDecision, incoming=None) -> str:
+    def _title(issuer: str, subject: str, genre: GenreDecision, incoming=None, variant: str = "") -> str:
         subject = subject.strip()
+        kind = genre.material_type or genre.suggested_genre or ""
+        if variant == "转发" and incoming is not None:
+            # 转发类通知（实务）：标题写作“××转发××关于××的通知”，避免“关于转发……的通知的通知”
+            verb = "批转" if "批转" in subject else "转发"
+            return f"{issuer}{verb}{incoming.title}" if incoming.title.endswith("通知") else f"{issuer}关于{verb}{incoming.title}的通知"
+        if kind == "命令（令）":
+            return ""  # 命令（令）格式不设标题：发文机关标志、令号之后即为正文（GB/T 9704—2012 10.2）
+        if kind in ("公报", "简报", "工作要点"):
+            core = re.sub(r"^(一期|一份|本期)", "", subject)
+            core = re.sub(r"(的)?(工作)?(简报)?$", "", core) if kind == "简报" else core
+            core = re.sub(r"^关于|的$|情况的$", "", core)
+            if kind == "公报":
+                return core if core.endswith("公报") else core + "公报"
+            if kind == "工作要点":
+                return core if core.endswith("要点") else core + "工作要点"
+            return core
+        if kind == "讲话稿":
+            m = re.match(r"^(.*?)在(.+?)上(的)?(讲话|发言)?(稿)?$", subject)
+            return f"在{m.group(2)}上的讲话" if m else subject
+        if kind == "汇报材料":
+            core = re.sub(r"^(向[^，。]{1,20}?)?(汇报|报告)", "", subject)
+            core = re.sub(r"(的)?(汇报材料|汇报|情况汇报)$", "", core)
+            return f"关于{re.sub(r'^关于', '', core)}的汇报"
+        if kind == "调研报告":
+            core = re.sub(r"(的)?调研(报告)?$", "", subject)
+            return f"关于{re.sub(r'^关于', '', core)}的调研报告"
         if genre.suggested_genre in ("批复", "函") and incoming is not None:
             core = incoming_core(incoming.title) if genre.suggested_genre == "函" else re.sub(r"的(请示|报告|函|意见)$", "", re.sub(r"^.*?关于", "", incoming.title))
             kind = "批复" if genre.suggested_genre == "批复" else "复函"
@@ -292,10 +397,10 @@ class OutlinePlanningSkill(Skill):
             return f"{meeting}{'会议' if not meeting.endswith(('会', '会议')) else ''}纪要"
         if genre.material_type and genre.suggested_genre == "通知":
             name = re.sub(r"^印发", "", subject)
-            name = name if re.search(r"(实施方案|工作方案|方案)$", name) else name + genre.material_type
+            name = name if re.search(r"(方案|计划|要点|办法|细则|规定|制度|规则|守则)$", name) else name + genre.material_type
             core = f"关于印发《{name}》的通知"
         elif genre.material_type:
-            return f"{subject}{'' if subject.endswith(genre.material_type) else genre.material_type}"
+            return subject if re.search(r"(方案|计划|要点|办法|细则|总结|材料|报告)$", subject) else f"{subject}{genre.material_type}"
         else:
             core = f"关于{subject}的{genre.suggested_genre or ''}"
         return f"{issuer}{core}" if issuer else core
