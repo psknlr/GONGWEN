@@ -90,15 +90,29 @@ class McpServer:
 
     # ------------------------------------------------------------------
     def handle(self, msg: Any) -> dict[str, Any] | None:
-        if not isinstance(msg, dict) or msg.get("jsonrpc") != "2.0":
+        if not isinstance(msg, dict):
             return _error(None, -32600, "Invalid Request")
-        method, mid, params = msg.get("method"), msg.get("id"), msg.get("params") or {}
-        if method is None:  # 客户端发来的响应（本服务不发请求），忽略
-            return None
+        # 能取到合法 id 时错误响应带回该 id，客户端才能对应到自己的请求
+        mid = msg.get("id")
+        if not (mid is None or isinstance(mid, str) or (isinstance(mid, (int, float)) and not isinstance(mid, bool))):
+            return _error(None, -32600, "Invalid Request: id 应为字符串或数字")
+        if msg.get("jsonrpc") != "2.0":
+            return _error(mid, -32600, "Invalid Request: jsonrpc 应为 \"2.0\"")
+        method, params = msg.get("method"), msg.get("params")
+        if method is None:
+            if "result" in msg or "error" in msg:  # 客户端发来的响应（本服务不发请求），忽略
+                return None
+            return _error(mid, -32600, "Invalid Request: 缺少 method")
+        if not isinstance(method, str):
+            return _error(mid, -32600, "Invalid Request: method 应为字符串")
         if "id" not in msg:  # 通知
             if method == "notifications/initialized":
                 self.initialized = True
             return None
+        if params is None:
+            params = {}
+        elif not isinstance(params, dict):  # 本服务的方法都按名称传参
+            return _error(mid, -32602, "Invalid params: params 应为对象")
         try:
             if method == "initialize":
                 requested = params.get("protocolVersion")
@@ -143,6 +157,9 @@ class McpServer:
                 _write(stdout, _error(None, -32700, "Parse error"))
                 continue
             if isinstance(msg, list):  # 兼容旧版本客户端的批量消息
+                if not msg:  # 空批量：按 JSON-RPC 2.0 回应单个错误
+                    _write(stdout, _error(None, -32600, "Invalid Request: 空批量"))
+                    continue
                 replies = [r for r in (self.handle(m) for m in msg) if r is not None]
                 if replies:
                     _write(stdout, replies)

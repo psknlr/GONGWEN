@@ -2,8 +2,10 @@
 
 实现要点：
 * “空N字”按字距换算为缩进磅值，“空N行”用与正文同高的空段落，不用空格字符填充；
-* 正文固定行距 28.99 磅（225mm ÷ 22 行，实务推导），3 号字字距 −0.25 磅使每行 28 字不超出版心；
-* 版记置于锚定在版心底部的文本框架中，使末条分隔线与最后一面版心下边缘重合；
+* 正文固定行距 579 缇（28.95 磅：225mm ÷ 22 行约 28.99 磅，向下取整到缇，22 行才不超出版心；实务推导），
+  3 号字字距 −0.25 磅使每行 28 字不超出版心；
+* 版记置于锚定在版心底部的浮动表格中，使末条分隔线与最后一面版心下边缘重合；版记估计高于一面版心时
+  改为紧接正文的普通表格（浮动表格会越出版心）；
 * 页码奇偶页分设：单页码居右空一字，双页码居左空一字；
 * 待补内容（【待……】）以黄色底纹突出，送审时一目了然；
 * 文档属性与页眉标注“智能体辅助起草，须人工审核”（《政务领域人工智能大模型部署应用指引》要求做好输出内容标识）。
@@ -11,6 +13,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 from pathlib import Path
 
@@ -20,7 +23,7 @@ from docx.enum.table import WD_TABLE_ALIGNMENT
 from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_BREAK, WD_LINE_SPACING, WD_TAB_ALIGNMENT
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
-from docx.shared import Mm, Pt, RGBColor
+from docx.shared import Mm, Pt, RGBColor, Twips
 
 from ..schemas.ir import Block, DocumentIR
 from .profile import MM_PER_PT, LayoutProfile, split_title, text_width_chars
@@ -103,7 +106,8 @@ class Compiler:
         self.no_grid(par)
         pf = par.paragraph_format
         pf.line_spacing_rule = WD_LINE_SPACING.EXACTLY
-        pf.line_spacing = Pt(line_pt or self.p.line_pt)
+        # 按缇写入（OOXML 行距单位）：正文 28.95 磅 = 579 缇，22 行 12738 缇不超出 225mm 版心（12756 缇）
+        pf.line_spacing = Twips(round((line_pt or self.p.line_pt) * 20))
         pf.space_before = Pt(0)
         pf.space_after = Pt(0)
         pf.widow_control = False
@@ -141,9 +145,17 @@ class Compiler:
             run = par.add_run(part)
             self.set_run(run, font, size, color, bold, highlight=bool(PLACEHOLDER_RE.fullmatch(part)))
 
-    def blank(self, n: int = 1, line_pt: float | None = None) -> None:
+    def blank(self, n: int = 1, line_pt: float | None = None, keep_next: bool = False) -> None:
         for _ in range(n):
-            self.para(line_pt=line_pt)
+            self.para(line_pt=line_pt, keep_next=keep_next)
+
+    def keep_last_with_next(self) -> None:
+        """使当前最后一个段落与下一段同页（最后一个元素是表格时不处理）。"""
+        last = next((el for el in reversed(self.doc.element.body) if el.tag != qn("w:sectPr")), None)
+        if last is not None and last.tag == qn("w:p"):
+            ppr = last.get_or_add_pPr()
+            if ppr.find(qn("w:keepNext")) is None:
+                insert_ordered(ppr, OxmlElement("w:keepNext"), PPR_SEQ)
 
     @staticmethod
     def border(par, edge: str, color: str = "000000", width_pt: float = 0.75, space_pt: float = 0) -> None:
@@ -348,7 +360,8 @@ class Compiler:
         for b in blocks:
             if b.kind == "heading":
                 font = levels.get(b.level, "fangsong")
-                par = self.para(first=2, keep_next=True)
+                # 只有单独成段的层次标题才与下段同页；带正文的列项（如“（一）……。”）若也设，会连成一串把整段推到下一面
+                par = self.para(first=2, keep_next=not (b.inline_heading and b.sentences))
                 self.add_text(par, f"{b.label}{b.heading}", font=font)
                 if b.inline_heading and b.sentences:
                     self.add_text(par, "".join(s.text for s in b.sentences))
@@ -399,19 +412,21 @@ class Compiler:
         sig = self.ir.signature
         organs = [o for o in sig.organs if o]
         date = sig.date
+        # 署名、成文日期不能脱离正文单独落到下一面：前一段、空行与署名行都与下段同页（成文日期本身不设）
+        self.keep_last_with_next()
         if sig.seal_mode == "seal":
             el = self.p.el("signature_seal")
-            self.blank(2)
+            self.blank(2, keep_next=True)
             dw = text_width_chars(date)
             right_date = el["date_right_indent_chars"]
             for o in organs:
                 ow = text_width_chars(o)
                 right = max(0.0, right_date + (dw - ow) / 2)
-                self.para(o, align=WD_ALIGN_PARAGRAPH.RIGHT, right=right)
+                self.para(o, align=WD_ALIGN_PARAGRAPH.RIGHT, right=right, keep_next=True)
             self.para(date, align=WD_ALIGN_PARAGRAPH.RIGHT, right=right_date)
         else:
             el = self.p.el("signature_noseal")
-            self.blank(1)
+            self.blank(1, keep_next=True)
             ow = max((text_width_chars(o) for o in organs), default=0)
             dw = text_width_chars(date)
             organ_right = el["organ_right_indent_chars"]
@@ -422,7 +437,7 @@ class Compiler:
             elif dw <= ow:
                 date_right = max(0.0, organ_right + (ow - dw) - el["date_shift_chars"])
             for o in organs:
-                self.para(o, align=WD_ALIGN_PARAGRAPH.RIGHT, right=organ_right)
+                self.para(o, align=WD_ALIGN_PARAGRAPH.RIGHT, right=organ_right, keep_next=True)
             self.para(date, align=WD_ALIGN_PARAGRAPH.RIGHT, right=max(0.0, date_right))
         if self.ir.note:
             note = self.ir.note.strip("（）()")
@@ -475,13 +490,24 @@ class Compiler:
         outer = max(2, int(round(el["outer_rule_mm"] / MM_PER_PT * 8)))
         inner = max(2, int(round(el["inner_rule_mm"] / MM_PER_PT * 8)))
         letter = self.ir.format_type == "letter"
+        char = self.p.size(size)
+        # 按行数估计版记高度。末页剩余版面不够时，渲染器会把浮动版记整体移到下一面底部（仍符合 7.4.1）；
+        # 但版记高于一面版心（如大量主送机关移入版记）时，锚定在版心底部必然越出版心乃至页面，改为紧接正文的普通表格
+        per_line = (self.p.type_width_pt - char * ind * 2) / char
+        n_lines = sum(1 if kind == "印发" else 1 + math.ceil(max(0.0, text_width_chars(text) - per_line) / (per_line - 3)) for kind, text in rows)
+        floating = n_lines * self.p.line_pt * 0.95 <= self.p.type_height_pt - self.p.line_pt
+        if not floating:
+            self.blank(1)
         table = self.doc.add_table(rows=len(rows), cols=1)
         tbl = table._tbl
         tblPr = tbl.tblPr
-        pos = OxmlElement("w:tblpPr")
-        for k, v in (("w:leftFromText", "0"), ("w:rightFromText", "0"), ("w:vertAnchor", "margin"), ("w:horzAnchor", "margin"), ("w:tblpXSpec", "center"), ("w:tblpYSpec", "bottom")):
-            pos.set(qn(k), v)
-        tblPr.insert(1 if tblPr.find(qn("w:tblStyle")) is not None else 0, pos)
+        if floating:
+            pos = OxmlElement("w:tblpPr")
+            for k, v in (("w:leftFromText", "0"), ("w:rightFromText", "0"), ("w:vertAnchor", "margin"), ("w:horzAnchor", "margin"), ("w:tblpXSpec", "center"), ("w:tblpYSpec", "bottom")):
+                pos.set(qn(k), v)
+            tblPr.insert(1 if tblPr.find(qn("w:tblStyle")) is not None else 0, pos)
+        else:
+            table.alignment = WD_TABLE_ALIGNMENT.CENTER
         width = str(int(round(self.p.type_width_pt * 20)))
         tblW = tblPr.find(qn("w:tblW"))
         if tblW is None:
@@ -510,7 +536,6 @@ class Compiler:
             m.set(qn("w:type"), "dxa")
             mar.append(m)
         tblPr.append(mar)
-        char = self.p.size(size)
         for i, (kind, text) in enumerate(rows):
             cell = table.cell(i, 0)
             cell.width = Pt(self.p.type_width_pt)

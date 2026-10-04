@@ -46,8 +46,18 @@ def check_docx(path: Path, profile: LayoutProfile, title: str, first_body: str =
         ls = body[0].paragraph_format.line_spacing
         pt = ls.pt if hasattr(ls, "pt") else 0
         out.append(LayoutCheck(rule_id="DOCX-LINE", item="正文行距", expected=f"固定值约{profile.line_pt}磅（每面22行撑满版心，实务推导）", actual=f"{pt:.2f}磅", status="pass" if abs(pt - profile.line_pt) < 0.1 else "warn", clause="GB/T 9704—2012 5.2.3", level="实务", conditional=True))
-    # 标题字体字号
-    tparas = [p for p in doc.paragraphs if p.text and p.text in title]
+    # 标题字体字号：取连续几段拼起来恰好等于标题的段落（标题可能回行为多段）；
+    # 不能用“段落文字包含于标题”判断——函的发文机关标志常是标题的开头，会量成红色机关标志
+    texts = [p.text for p in doc.paragraphs]
+    tparas = []
+    for i, t in enumerate(texts):
+        acc, j = t, i
+        while t and title.startswith(acc) and acc != title and j + 1 < len(texts) and texts[j + 1]:
+            j += 1
+            acc += texts[j]
+        if t and acc == title:
+            tparas = doc.paragraphs[i : j + 1]
+            break
     if tparas:
         r = tparas[0].runs[0]
         rf = r._element.rPr.rFonts.get(qn("w:eastAsia")) if r._element.rPr is not None and r._element.rPr.rFonts is not None else ""

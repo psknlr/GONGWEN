@@ -62,6 +62,11 @@ def _parse_override(item: str) -> dict[str, Any]:
     return out
 
 
+def _toml_str(value: str) -> str:
+    """TOML 基本字符串：引号、反斜杠与控制字符转义（JSON 字符串转义均为 TOML 合法转义，另补 DEL）。"""
+    return json.dumps(value, ensure_ascii=False).replace("\x7f", "\\u007f")
+
+
 def _merge(a: dict[str, Any], b: dict[str, Any]) -> dict[str, Any]:
     out = dict(a)
     for k, v in b.items():
@@ -70,9 +75,15 @@ def _merge(a: dict[str, Any], b: dict[str, Any]) -> dict[str, Any]:
 
 
 def tty_approver(req) -> bool:
-    """工具动作审批（如写出工作区以外）：只在交互终端询问。"""
+    """工具动作审批（如写出工作区以外）：只在交互终端询问。显示调用参数（如文件路径），人据实判断。"""
+    from ..agent.render import visible
+
     where = "，越出工作区" if req.outside_workspace else ""
-    print(f"\n需要审批：{req.summary}（工具 {req.tool}，风险 {req.risk}{where}）", file=sys.stderr)
+    print(visible(f"\n需要审批：{req.summary}（工具 {req.tool}，风险 {req.risk}{where}）"), file=sys.stderr)
+    args = (req.details or {}).get("args", req.details) or {}
+    for k, v in args.items() if isinstance(args, dict) else ():
+        s = v if isinstance(v, str) else json.dumps(v, ensure_ascii=False, default=str)
+        print(visible(f"  参数 {k}：{s[:300]}{'……（共 ' + str(len(s)) + ' 字）' if len(s) > 300 else ''}"), file=sys.stderr)
     try:
         return input("是否批准？[y/N] ").strip().lower() in ("y", "yes", "是")
     except EOFError:
@@ -147,6 +158,28 @@ def _clearance(value: str | None):
     return c
 
 
+def _material_paths(items: list[str] | None) -> list[Path]:
+    """先校验全部材料路径再创建任务：路径有误时不留下没有材料的空任务。"""
+    for m in items or []:
+        if not Path(m).is_file():
+            raise FileNotFoundError(f"材料不存在或不是文件：{m}")
+    return [Path(m) for m in items or []]
+
+
+def _add_materials(eng, task_id: str, paths: list[Path], user, declared, echo: bool = False) -> list[dict[str, Any]]:
+    """逐个添加材料，返回被禁止进入当前环境（已清除）的材料。"""
+    from ..schemas.common import AdmissionDecision
+
+    forbidden = []
+    for p in paths:
+        res = eng.add_material(task_id, p.name, p.read_bytes(), by=user, declared=declared)
+        if echo:
+            print(f"{res.material_id} {p.name}：{res.decision.value}（{res.detected_clearance.value}）", file=sys.stderr)
+        if res.decision == AdmissionDecision.FORBID:
+            forbidden.append({"material_id": res.material_id, "filename": p.name, "reasons": res.reasons})
+    return forbidden
+
+
 # ---------------------------------------------------------------- init / doctor / config
 def cmd_init(args) -> int:
     from ..kernel.config import DEFAULT_CONFIG_TOML
@@ -160,8 +193,8 @@ def cmd_init(args) -> int:
     else:
         if args.unit_profile not in kb.list_profiles():
             raise ValueError(f"未知单位配置档：{args.unit_profile}（可选：{'、'.join(kb.list_profiles())}）")
-        text = DEFAULT_CONFIG_TOML.replace('unit_profile = "party_gov"', f'unit_profile = "{args.unit_profile}"')
-        text = text.replace('unit_name = ""', f'unit_name = "{args.unit_name or ""}"').replace('region = ""', f'region = "{args.region or ""}"', 1)
+        text = DEFAULT_CONFIG_TOML.replace('unit_profile = "party_gov"', f"unit_profile = {_toml_str(args.unit_profile)}")
+        text = text.replace('unit_name = ""', f"unit_name = {_toml_str(args.unit_name or '')}", 1).replace('region = ""', f"region = {_toml_str(args.region or '')}", 1)
         cfg_dir.mkdir(parents=True, exist_ok=True)
         cfg_path.write_text(text, encoding="utf-8")
         (cfg_dir / ".gitignore").write_text("# 任务数据、材料与审计日志不入版本库\n*\n!config.toml\n!.gitignore\n", encoding="utf-8")
@@ -231,17 +264,15 @@ def cmd_task_new(args) -> int:
     eng = make_engine(args)
     user = human_user(args)
     hints = {k: v for k, v in {"recipients": args.to, "issuer_type": args.issuer, "genre": args.genre}.items() if v}
-    st = eng.create_task(args.request, by=user, matter_id=args.matter, hints=hints)
     declared = _clearance(args.clearance)
-    for m in args.material or []:
-        p = Path(m)
-        res = eng.add_material(st.task_id, p.name, p.read_bytes(), by=user, declared=declared)
-        print(f"{res.material_id} {p.name}：{res.decision.value}（{res.detected_clearance.value}）", file=sys.stderr)
+    paths = _material_paths(args.material)
+    st = eng.create_task(args.request, by=user, matter_id=args.matter, hints=hints)
+    forbidden = _add_materials(eng, st.task_id, paths, user, declared, echo=True)
     if args.json:
-        emit_json({"task_id": st.task_id, "matter_id": st.matter_id})
+        emit_json({"task_id": st.task_id, "matter_id": st.matter_id, "forbidden_materials": forbidden})
     else:
         print(st.task_id)
-    return EXIT_OK
+    return EXIT_BLOCKED if paths and len(forbidden) == len(paths) else EXIT_OK
 
 
 def cmd_task_add(args) -> int:
@@ -282,8 +313,10 @@ def cmd_task_list(args) -> int:
     if args.json:
         emit_json(rows)
     else:
+        from ..agent.render import visible
+
         for r in rows:
-            print(f"{r['task_id']}　{r['stage']}　{r['doc_status']}　待确认 {r['pending']}　{r['request']}")
+            print(visible(f"{r['task_id']}　{r['stage']}　{r['doc_status']}　待确认 {r['pending']}　{r['request']}"))
     return EXIT_OK
 
 
@@ -391,23 +424,27 @@ def cmd_exec(args) -> int:
     if args.json:
         eng.rt.listeners.append(lambda tid, rec: emit_json({"type": "event", "task_id": tid, "event": rec.get("type"), **{k: rec.get(k) for k in ("seq", "ts", "actor", "stage", "payload")}}))
     hints = {k: v for k, v in {"recipients": args.to, "issuer_type": args.issuer, "genre": args.genre}.items() if v}
-    st = eng.create_task(args.request, by=user, matter_id=args.matter, hints=hints)
     declared = _clearance(args.clearance)
-    for m in args.material or []:
-        p = Path(m)
-        if not p.is_file():
-            raise FileNotFoundError(f"材料不存在：{m}")
-        eng.add_material(st.task_id, p.name, p.read_bytes(), by=user, declared=declared)
-    eng.advance(st.task_id, by=user, auto_accept=accept)
+    paths = _material_paths(args.material)
+    st = eng.create_task(args.request, by=user, matter_id=args.matter, hints=hints)
+    forbidden = _add_materials(eng, st.task_id, paths, user, declared)
+    # 给出的材料全部被禁止进入当前环境（已清除）：不再推进，不能凭占位稿走到人工送审
+    all_forbidden = bool(paths) and len(forbidden) == len(paths)
+    if not all_forbidden:
+        eng.advance(st.task_id, by=user, auto_accept=accept)
     s = eng.status(st.task_id)
-    code = exit_code_for(s["stage"])
+    code = EXIT_BLOCKED if all_forbidden else exit_code_for(s["stage"])
     if args.json:
-        emit_json({"type": "result", "exit_code": code, **s})
+        emit_json({"type": "result", "exit_code": code, **s, "forbidden_materials": forbidden})
     else:
-        from ..agent.render import fmt_status
+        from ..agent.render import fmt_status, visible
 
         print(fmt_status(s))
-        if code == EXIT_WAIT:
+        for f in forbidden:
+            print(visible(f"  ⚠ 禁止进入当前环境（已清除）：{f['material_id']} {f['filename']}：{'；'.join(f['reasons'])}"))
+        if all_forbidden:
+            print("\n全部材料均被禁止进入当前环境，任务未推进：请在获准处理该属性材料的环境中办理，或另行添加可进入的材料。")
+        elif code == EXIT_WAIT:
             print("\n任务停在需要人工处理的审核节点：用 gongwen task confirm 处理后再 gongwen task advance，或运行 gongwen serve 在浏览器中处理。")
     return code
 
@@ -415,6 +452,7 @@ def cmd_exec(args) -> int:
 # ---------------------------------------------------------------- chat
 def cmd_chat(args) -> int:
     from ..agent import AgentSession, HumanCommands
+    from ..agent.render import visible
 
     eng = make_engine(args)
     user = human_user(args)
@@ -422,7 +460,7 @@ def cmd_chat(args) -> int:
 
     def on_tool(ev) -> None:
         mark = "✓" if ev.ok else "✗"
-        print(f"  {mark} {ev.name}：{ev.summary}", file=sys.stderr)
+        print(visible(f"  {mark} {ev.name}：{ev.summary}"), file=sys.stderr)
 
     session = AgentSession(eng, human=user, workspace=ws, on_tool=on_tool)
     server_box: dict[str, Any] = {}
@@ -453,14 +491,17 @@ def cmd_chat(args) -> int:
         if line in ("/quit", "/exit"):
             return EXIT_OK
         if line.startswith("/"):
-            print(cmds.run(line))
+            try:
+                print(cmds.run(line))
+            except Exception as exc:  # 斜杠命令出错不能结束对话：报告后继续
+                print(visible(f"命令执行失败（{type(exc).__name__}）：{exc}"))
             continue
         ok, desc = session.model_status()
         if not ok:
             print(desc)
             continue
         reply = session.send(line)
-        print(reply.text)
+        print(visible(reply.text))  # 模型输出：控制字符显示为可见转义
 
 
 # ---------------------------------------------------------------- serve / mcp
@@ -493,6 +534,12 @@ def cmd_mcp(args) -> int:
 
 
 # ---------------------------------------------------------------- check / format
+def _import_warnings(ir) -> None:
+    """解析提示（如未接受的修订痕迹）写到标准错误，不混入 JSON 输出。"""
+    if ir.meta.get("import_warnings"):
+        print(f"解析提示：{ir.meta['import_warnings']}", file=sys.stderr)
+
+
 def cmd_check(args) -> int:
     from datetime import date
 
@@ -503,6 +550,7 @@ def cmd_check(args) -> int:
     rt = build_runtime(workspace_of(args), profile=args.profile)
     p = Path(args.file)
     ir = ir_from_file(p.name, p.read_bytes(), genre=args.genre)
+    _import_warnings(ir)
     res = check_external(ir, rt, as_of=date.fromisoformat(args.as_of) if args.as_of else None, region=args.region)
     d = res.to_dict()
     emit_json(d) if args.json else print(fmt_check(d))
@@ -517,8 +565,13 @@ def cmd_format(args) -> int:
     rt = build_runtime(workspace_of(args), profile=args.profile)
     p = Path(args.file)
     ir = ir_from_file(p.name, p.read_bytes(), genre=args.genre)
+    _import_warnings(ir)
     out = Path(args.out or (p.parent / "gongwen-format"))
-    report = layout_document(ir, out, profile_id=rt.config.layout.profile, margin_mode=args.margin or rt.config.layout.margin_mode, render_check=not args.no_render, stem=p.stem)
+    stem = p.stem
+    # 输出目录就是原稿所在目录且同名时（如 -o .），输出文件加后缀，绝不覆盖原稿
+    if any((out / f"{stem}{ext}").resolve() == p.resolve() for ext in (".docx", ".html", ".md", ".pdf")):
+        stem += ".排版"
+    report = layout_document(ir, out, profile_id=rt.config.layout.profile, margin_mode=args.margin or rt.config.layout.margin_mode, render_check=not args.no_render, stem=stem)
     if args.json:
         emit_json(json.loads(report.model_dump_json()))
     else:
@@ -674,8 +727,10 @@ def cmd_session_replay(args) -> int:
         if args.json:
             emit_json(rec)
         else:
+            from ..agent.render import visible
+
             payload = json.dumps(rec.get("payload", {}), ensure_ascii=False)
-            print(f"#{rec['seq']:>4} {rec['ts'][:19]} {rec['type']:<22} {rec.get('actor', ''):<16} {payload[:150]}")
+            print(visible(f"#{rec['seq']:>4} {rec['ts'][:19]} {rec['type']:<22} {rec.get('actor', ''):<16} {payload[:150]}"))
     return EXIT_OK
 
 
@@ -905,6 +960,9 @@ def main(argv: list[str] | None = None) -> int:
     except (KeyError, ValueError, PermissionError, FileNotFoundError) as exc:
         msg = exc.args[0] if isinstance(exc, KeyError) and exc.args else exc
         print(f"错误：{msg}", file=sys.stderr)
+        return EXIT_USAGE
+    except OSError as exc:  # 如把目录当作文件：给出中文说明而不是堆栈
+        print(f"错误：无法读写 {exc.filename or '文件'}（{'是目录，不是文件' if isinstance(exc, IsADirectoryError) else exc.strerror or exc}）", file=sys.stderr)
         return EXIT_USAGE
 
 

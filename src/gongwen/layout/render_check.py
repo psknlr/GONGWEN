@@ -124,6 +124,26 @@ def _norm(s: str) -> str:
     return re.sub(r"\s+", "", s)
 
 
+def _full_page_rows(pages: list[tuple[float, float, list[Line]]], top_mm: float, bottom_mm: float, pitch_mm: float) -> list[tuple[int, int]]:
+    """已排满的续页各排了几行：首行在版心第一行格、各行都落在同一行格上且空行不多（含表格、大字号标题的页面不计），
+    且按实测行距版心内已排不下下一行。末页（版记所在页）不计。返回 (页码, 行数)。"""
+    out = []
+    for n, (_, _, lines) in enumerate(pages[:-1], 1):
+        ys = sorted({round(l.y0_mm, 2) for l in lines if top_mm - 1 <= l.y0_mm <= bottom_mm and l.text.strip()})
+        if len(ys) < 3 or ys[0] - top_mm > pitch_mm:  # 首行不在版心第一行格：不是续页
+            continue
+        steps = [(y - ys[0]) / pitch_mm for y in ys]
+        if any(abs(s - round(s)) > 0.15 for s in steps):
+            continue
+        k = round(steps[-1]) + 1
+        if k < 3 or len(ys) < k - 4:
+            continue
+        pitch = (ys[-1] - ys[0]) / (k - 1)
+        if bottom_mm - (top_mm + k * pitch) < pitch:
+            out.append((n, k))
+    return out
+
+
 def check_rendering(docx: Path, ir: DocumentIR, profile: LayoutProfile, fonts_requested: set[str], out_dir: Path) -> tuple[RenderInfo, list[LayoutCheck]]:
     info = RenderInfo(fonts_requested=sorted(fonts_requested))
     checks: list[LayoutCheck] = []
@@ -215,7 +235,12 @@ def check_rendering(docx: Path, ir: DocumentIR, profile: LayoutProfile, fonts_re
     if best:
         g = profile.data["grid"]
         rows = len({round(l.y0, 0) for l in best})
-        checks.append(LayoutCheck(rule_id="LAY-LINES", item="每面行数", expected=f"一般{g['lines_per_page']}行", actual=f"{rows}行（正文最满一页，含空行时少于{g['lines_per_page']}属正常）", status="pass" if rows <= g["lines_per_page"] else "warn", clause="GB/T 9704—2012 5.2.3", conditional=True))
+        # 已排满的续页却不足 22 行：行距偏大（如 580 缇×22 行超出 225mm 版心，每面只能排 21 行）
+        short = [(n, k) for n, k in _full_page_rows(pages, top_area, bottom_area, profile.line_pt * MM_PER_PT) if k < g["lines_per_page"]]
+        actual = f"{rows}行（正文最满一页，含空行时少于{g['lines_per_page']}属正常）"
+        if short:
+            actual += "；排满的页面只有" + "、".join(f"第{n}面{k}行" for n, k in short[:5])
+        checks.append(LayoutCheck(rule_id="LAY-LINES", item="每面行数", expected=f"一般{g['lines_per_page']}行", actual=actual, status="pass" if rows <= g["lines_per_page"] and not short else "warn", clause="GB/T 9704—2012 5.2.3", conditional=True, note="排满的页面不足规定行数，多为行距偏大" if short else ""))
         widths = []
         for l in best:
             t = l.text
@@ -228,7 +253,12 @@ def check_rendering(docx: Path, ir: DocumentIR, profile: LayoutProfile, fonts_re
         pl = next((l for l in reversed(last) if ir.imprint.printer[:4] in l.text), None)
         if pl is not None:
             gap = bottom_area - pl.y1 * MM_PER_PT
-            checks.append(LayoutCheck(rule_id="LAY-IMPRINT", item="版记位于最后一面版心底部", expected="末条分隔线与版心下边缘重合", actual=f"印发行下缘距版心下边缘 {gap:.1f}mm", status="pass" if gap <= 6 else "warn", clause="GB/T 9704—2012 7.4.1", conditional=True))
+            # 末条分隔线应与版心下边缘重合：负值表示版记越出版心（过长的浮动版记会越出页面），过大表示未排到底部
+            ok = -1 <= gap <= 6
+            note = "" if ok else ("版记越出版心下边缘：应精简主送、抄送" if gap < -1 else "版记未排到最后一面版心底部（版记高于一面版心时只能紧接正文排列）")
+            checks.append(LayoutCheck(rule_id="LAY-IMPRINT", item="版记位于最后一面版心底部", expected="末条分隔线与版心下边缘重合（印发行下缘距版心下边缘 −1～6mm）", actual=f"印发行下缘距版心下边缘 {gap:.1f}mm", status="pass" if ok else "fail", clause="GB/T 9704—2012 7.4.1", note=note))
+        else:
+            checks.append(LayoutCheck(rule_id="LAY-IMPRINT", item="版记位于最后一面版心底部", expected="末条分隔线与版心下边缘重合", actual="最后一面未检测到印发行", status="warn", clause="GB/T 9704—2012 7.4.1", note="版记可能越出页面或被拆到其他页面，请人工查看"))
     if info.substitutions:
         info.notes.append("存在字体替代：渲染结果仅能核验版面结构，不能据此声称已满足指定字体版式；请在安装规定字库的环境中复核")
     return info, checks

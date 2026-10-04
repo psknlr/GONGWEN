@@ -176,15 +176,23 @@ def ir_from_text(text: str, *, doc_id: str = "EXT", genre: str | None = None, di
     if att_start is not None:
         chunk, cur = rest[att_start:], None
         rest = rest[:att_start]
+        att_table: list[str] = []
         for x in chunk:
             m = ATT_HEAD.match(x)
+            if cur is not None and att_table and (m or not x.startswith("|")):
+                cur.blocks.append(b.table(att_table))  # 附件中的表格同样按表格块处理
+                att_table = []
             if m:
                 cur = Attachment(seq=int(m.group(1) or 1), title="")
                 attachments.append(cur)
             elif cur is not None and not cur.title:
                 cur.title = x
+            elif cur is not None and x.startswith("|"):
+                att_table.append(x)
             elif cur is not None:
                 cur.blocks.append(b.block(x))
+        if cur is not None and att_table:
+            cur.blocks.append(b.table(att_table))
     note = ""
     if rest and re.fullmatch(r"[（(].+[）)]", rest[-1]) and len(rest[-1]) <= 120:
         note = rest.pop()[1:-1]
@@ -242,9 +250,15 @@ def ir_from_text(text: str, *, doc_id: str = "EXT", genre: str | None = None, di
 
 
 def ir_from_file(filename: str, data: bytes, **kw) -> DocumentIR:
-    """DOCX/PDF/TXT/MD：先用材料解析器按原顺序取出可见文本，再识别结构。"""
+    """DOCX/PDF/TXT/MD：先用材料解析器按原顺序取出可见文本，再识别结构。
+
+    文件无法解析或解析不出文字时报错，不把空文稿当作“已检查/已排版”；其余解析提示记入 meta。
+    """
     if filename.lower().endswith((".txt", ".md", ".markdown")):
-        return ir_from_text(data.decode("utf-8", errors="replace"), **kw)
+        text = data.decode("utf-8", errors="replace")
+        if not text.strip():
+            raise ValueError(f"无法从 {filename} 读取文稿内容：文件为空")
+        return ir_from_text(text, **kw)
     res = parse_bytes("EXT", filename, data)
     tables = {t.table_id: t for t in res.tables}
     emitted: set[str] = set()
@@ -261,7 +275,12 @@ def ir_from_file(filename: str, data: bytes, **kw) -> DocumentIR:
         if u.kind in ("comment", "footnote"):
             continue
         lines.append(u.text)
-    return ir_from_text("\n".join(lines), **kw)
+    if not any(x.strip() for x in lines):
+        raise ValueError(f"无法从 {filename} 读取文稿内容：{'；'.join(res.warnings) or '未解析出任何文字（扫描件须先做文字识别）'}")
+    ir = ir_from_text("\n".join(lines), **kw)
+    if res.warnings:
+        ir.meta["import_warnings"] = "；".join(res.warnings)
+    return ir
 
 
 @dataclass
