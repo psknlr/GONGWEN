@@ -77,6 +77,12 @@ class GenreAuthoritySkill(Skill):
         else:
             genre, why = preliminary_genre(spec.purposes, direction, requested)
         g = kb.genre(genre)
+        if genre == "通知" and Purpose.ISSUE_PLAN.value in spec.purposes:
+            # “印发……方案的通知”：通知是文种，方案是所印发的事务材料
+            m = re.search(r"印发[^，。]{0,40}?(实施方案|工作方案|方案)", spec.request_text)
+            if m:
+                genre, g = "工作方案", kb.genre("工作方案")
+                why = "方案、办法等需由通知印发：通知为文种，方案作为附件"
         decision = GenreDecision(
             layer=spec.layer.value or TaskLayer.FORMAL.value,
             direction=direction,
@@ -90,6 +96,12 @@ class GenreAuthoritySkill(Skill):
             if g.issue_vehicle:
                 decision.reasons.append(f"“{genre}”不是条例第八条所列文种；需要正式下发时，应以{g.issue_vehicle}印发，{genre}作为附件")
                 decision.citations.append(citation("GW-GENRE-011"))
+        if decision.direction == Direction.UNKNOWN.value and decision.suggested_genre:
+            dirs = (kb.genre(decision.suggested_genre).directions or []) if kb.genre(decision.suggested_genre) else []
+            if len(dirs) == 1:
+                # 文种只有一种行文方向（报告只能上行、决定与通报下行）：据文种确定，仍在任务契约中供人工核对
+                decision.direction = dirs[0]
+                decision.reasons.append(f"行文方向未在需求中说明，按文种“{decision.suggested_genre}”定为{dirs[0]}")
         if decision.suggested_genre:
             gi = kb.genre(decision.suggested_genre)
             decision.format_type = {"函": "letter", "纪要": "jiyao", "命令（令）": "command"}.get(decision.suggested_genre, "general")

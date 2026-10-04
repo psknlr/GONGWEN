@@ -247,6 +247,28 @@ def check_rendering(docx: Path, ir: DocumentIR, profile: LayoutProfile, fonts_re
             widths.append(sum(1.0 if ord(c) > 0x2E7F else 0.5 for c in t))
         maxw = max(widths)
         checks.append(LayoutCheck(rule_id="LAY-CHARS", item="每行字数", expected=f"一般{g['chars_per_line']}字", actual=f"最长行约{maxw:.0f}字", status="pass" if maxw <= g["chars_per_line"] + 0.6 else "warn", clause="GB/T 9704—2012 5.2.3", conditional=True))
+    # 署名页须有正文：署名、成文日期不能单独成页（7.3.5.5：容不下时调整行距、字距解决）
+    date_text = _norm(ir.signature.date or "")
+    organ_text = _norm(ir.signature.organs[0]) if ir.signature.organs else ""
+    if date_text and ir.format_type != "jiyao":
+        body_all = _norm("".join(b.text() for b in ir.blocks))
+        sig_page = next((i for i, (_, _, ls) in enumerate(pages) if any(_norm(l.text) == date_text for l in ls)), None)
+        if sig_page is not None:
+            _, _, ls = pages[sig_page]
+            organ_line = next((l for l in ls if organ_text and _norm(l.text) == organ_text), None)
+            above = [l for l in ls if organ_line is None or l.y0 < organ_line.y0]
+            has_body = sig_page == 0 or any(len(_norm(l.text)) >= 4 and _norm(l.text) in body_all for l in above)
+            checks.append(
+                LayoutCheck(
+                    rule_id="LAY-SIGNATURE",
+                    item="署名、成文日期与正文同页",
+                    expected="署名页有正文，不单独成页",
+                    actual=f"第{sig_page + 1}面" + ("有正文" if has_body else "只有附件说明或署名"),
+                    status="pass" if has_body else "fail",
+                    clause="GB/T 9704—2012 7.3.5.5",
+                    note="" if has_body else "署名与成文日期被挤到下一面：应调整行距、字距，或使正文末段与署名同页",
+                )
+            )
     # 版记：末条分隔线与最后一面版心下边缘重合（以印发行位置近似）
     if ir.imprint.printer and ir.format_type != "letter":
         _, _, last = pages[-1]

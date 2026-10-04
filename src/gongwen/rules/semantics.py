@@ -22,6 +22,12 @@ from .textutil import DATE_RE, clause_span, clauses, extract_numbers, mention_of
 APPROVAL_CLAIM = re.compile(r"(经[^，。；]{0,20}(批准|同意|审定|审议通过))|(已(获|经)?(批准|批复|同意|立项))|(研究决定)|(批准同意)")
 VERIFY_CLAIM = re.compile(r"经(过)?([^，。；]{0,6}?)(认真|逐一|实地)?(核实|核查|查实|核定|核对|审核确认|审计确认)")
 AGGREGATE = re.compile(r"(共计|合计|总计|累计|总共|共有|总数)")
+_PLACEHOLDER = re.compile(r"【待[^】]*】")
+
+
+def _claim_text(text: str) -> str:
+    """去掉【待补：……】占位：占位中的说明文字（如“须依据真实研究决定”）不是文稿表述。"""
+    return _PLACEHOLDER.sub("", text)
 
 
 @dataclass
@@ -292,7 +298,7 @@ def check_fact_status(ctx: CheckContext) -> list[ReviewIssue]:
                         fix_hint={"op": "downgrade_progress", "fact": f.fact_id},
                     )
                 )
-            if f.status == FactStatus.RECORDED and VERIFY_CLAIM.search(s.text):
+            if f.status == FactStatus.RECORDED and VERIFY_CLAIM.search(_claim_text(s.text)):
                 out.append(ctx.issue("GW-FACT-001", IssueType.STATUS_UPGRADE, f"{f.fact_id} 为“材料记载”，未经独立核实，不能表述为“经核实”", block=b, sentence=s, evidence=ev, evidence_text=_source_excerpt(f), severity=Severity.MAJOR))
     return out
 
@@ -302,11 +308,12 @@ def check_approval_claims(ctx: CheckContext) -> list[ReviewIssue]:
     if ctx.ir.genre == "批复":
         return out
     for b, s in ctx.ir.iter_sentences():
-        m = APPROVAL_CLAIM.search(s.text)
+        text = _claim_text(s.text)
+        m = APPROVAL_CLAIM.search(text)
         if not m:
             continue
-        a, _ = clause_span(s.text, m.start())
-        if re.search(r"(须|需|需要|应|应当|必须|要|报|报请|提请|待|拟)经?$", s.text[a : m.start()].strip()) or re.search(r"(须|需|应当?|必须|报请?|提请)经", s.text[a : m.end()]):
+        a, _ = clause_span(text, m.start())
+        if re.search(r"(须|需|需要|应|应当|必须|要|报|报请|提请|待|拟)经?$", text[a : m.start()].strip()) or re.search(r"(须|需|应当?|必须|报请?|提请)经", text[a : m.end()]):
             continue  # “确需延期的，须经××批准”是程序要求，不是“已获批准”的陈述
         approved = [f for f in _facts_for(ctx, s) if f.status == FactStatus.APPROVED and f.approval_ref]
         if not approved:

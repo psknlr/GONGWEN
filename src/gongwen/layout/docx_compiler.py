@@ -61,11 +61,14 @@ PLACEHOLDER_RE = re.compile(r"(【待[^】]*】)")
 
 
 class Compiler:
-    def __init__(self, ir: DocumentIR, profile: LayoutProfile, draft_label: bool = True):
+    def __init__(self, ir: DocumentIR, profile: LayoutProfile, draft_label: bool = True, tight: int = 0):
         self.ir = ir
         self.p = profile
         self.doc = Document()
         self.draft_label = draft_label
+        # 署名页无正文时的调整级别（7.3.5.5：所剩空白容不下署名、成文日期时调整行距、字距）：
+        # 1 = 正文与附件说明、署名之间的空行减为半行高；2 = 另使正文末段与署名同页
+        self.tight = tight
         self.imported = ir.meta.get("source") == "imported"  # 外部文稿：只排版，内容未经本系统核验
         self.fonts_used: set[str] = set()
 
@@ -148,6 +151,10 @@ class Compiler:
     def blank(self, n: int = 1, line_pt: float | None = None, keep_next: bool = False) -> None:
         for _ in range(n):
             self.para(line_pt=line_pt, keep_next=keep_next)
+
+    def gap_pt(self) -> float | None:
+        """正文与附件说明、署名之间空行的行高：调整时减为半行（7.3.5.5 允许调整行距）。"""
+        return self.p.line_pt / 2 if self.tight >= 1 else None
 
     def keep_last_with_next(self) -> None:
         """使当前最后一个段落与下一段同页（最后一个元素是表格时不处理）。"""
@@ -396,16 +403,19 @@ class Compiler:
         if not notes:
             return
         el = self.p.el("attachment_note")
-        self.blank(el["blank_lines_before"])
+        # 附件说明与署名同页；仍放不下时（tight=2）正文末段也与署名同页，避免署名页只有附件说明而无正文（7.3.5.5）
+        if self.tight >= 2:
+            self.keep_last_with_next()
+        self.blank(el["blank_lines_before"], line_pt=self.gap_pt(), keep_next=True)
         base = el["left_indent_chars"]
         for i, n in enumerate(notes):
             label = f"{n.seq}." if len(notes) > 1 else ""
             name = n.name.rstrip("。，；：.,;")
             if i == 0:
-                par = self.para(left=base + 3 + (1 if label else 0), first=-(3 + (1 if label else 0)))
+                par = self.para(left=base + 3 + (1 if label else 0), first=-(3 + (1 if label else 0)), keep_next=True)
                 self.add_text(par, f"附件：{label}{name}")
             else:
-                par = self.para(left=base + 3 + 1, first=-1)
+                par = self.para(left=base + 3 + 1, first=-1, keep_next=True)
                 self.add_text(par, f"{label}{name}")
 
     def signature_block(self) -> None:
@@ -416,7 +426,7 @@ class Compiler:
         self.keep_last_with_next()
         if sig.seal_mode == "seal":
             el = self.p.el("signature_seal")
-            self.blank(2, keep_next=True)
+            self.blank(2, line_pt=self.gap_pt(), keep_next=True)
             dw = text_width_chars(date)
             right_date = el["date_right_indent_chars"]
             for o in organs:
@@ -426,7 +436,7 @@ class Compiler:
             self.para(date, align=WD_ALIGN_PARAGRAPH.RIGHT, right=right_date)
         else:
             el = self.p.el("signature_noseal")
-            self.blank(1, keep_next=True)
+            self.blank(1, line_pt=self.gap_pt(), keep_next=True)
             ow = max((text_width_chars(o) for o in organs), default=0)
             dw = text_width_chars(date)
             organ_right = el["organ_right_indent_chars"]
@@ -601,7 +611,7 @@ class Compiler:
         return path
 
 
-def compile_docx(ir: DocumentIR, path: str | Path, profile: LayoutProfile | None = None, draft_label: bool = True) -> tuple[Path, set[str]]:
-    c = Compiler(ir, profile or LayoutProfile.load(), draft_label=draft_label)
+def compile_docx(ir: DocumentIR, path: str | Path, profile: LayoutProfile | None = None, draft_label: bool = True, tight: int = 0) -> tuple[Path, set[str]]:
+    c = Compiler(ir, profile or LayoutProfile.load(), draft_label=draft_label, tight=tight)
     out = c.compile(path)
     return out, c.fonts_used

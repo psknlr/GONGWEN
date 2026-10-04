@@ -176,7 +176,7 @@ class DocumentIR(GWModel):
         if self.note:
             parts.append(f"（{self.note}）")
         for att in self.attachments:
-            parts.append(f"附件{att.seq}")
+            parts.append(f"附件{att.seq}" if len(self.attachments) > 1 else "附件")
             parts.append(att.title)
             parts.extend(b.text() for b in att.blocks)
         return "\n".join(p for p in parts if p)
@@ -198,4 +198,14 @@ class DocumentIR(GWModel):
         out += [*self.signature.organs, self.signature.date, ""]
         if self.note:
             out += [f"（{self.note}）", ""]
+        for att in self.attachments:
+            out += ["---", "", f"附件{att.seq}" if len(self.attachments) > 1 else "附件", "", f"## {att.title}", ""]
+            for b in att.blocks:
+                if b.kind == "heading" and not b.inline_heading:
+                    out += [f"{'#' * (b.level + 2)} {b.label}{b.heading}", ""]
+                elif b.kind == "table" and b.table:
+                    out += ["| " + " | ".join(b.table[0]) + " |", "|" + "---|" * len(b.table[0])]
+                    out += ["| " + " | ".join(r) + " |" for r in b.table[1:]] + [""]
+                else:
+                    out += [b.text(), ""]
         return "\n".join(out)

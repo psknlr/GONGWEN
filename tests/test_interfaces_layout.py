@@ -275,3 +275,23 @@ def test_rendered_pages_hold_22_lines_and_imprint_stays_on_page(tmp_path):
     _, checks = check_rendering(path, ir2, wide, fonts, tmp_path / "wide")
     lines = next(c for c in checks if c.rule_id == "LAY-LINES")
     assert lines.status == "warn" and "21行" in lines.actual
+
+
+@pytest.mark.skipif(not (shutil.which("soffice") and shutil.which("pdftotext")), reason="需要 LibreOffice 与 poppler 做实际渲染")
+def test_signature_is_not_pushed_alone_to_next_page(tmp_path):
+    """正文末段之后的附件说明与署名恰好放不下时，按 7.3.5.5 缩小空行行距，署名不单独成页。"""
+    from gongwen.layout.pipeline import layout_document
+    from gongwen.schemas.ir import AttachmentNote
+
+    ir = ir_from_text(
+        "示例市卫生健康委员会关于印发《基层医疗示范点建设工作方案》的通知\n各区卫生健康局：\n"
+        "现将《基层医疗示范点建设工作方案》印发给你们，请结合实际认真组织实施。\n示例市卫生健康委员会\n2026年3月1日\n"
+    )
+    ir.header.organ_mark = "示例市卫生健康委员会文件"
+    ir.header.doc_number = "示卫发〔2026〕1号"
+    ir.signature.seal_mode = "seal"
+    ir.attachment_notes = [AttachmentNote(seq=1, name="基层医疗示范点建设工作方案")]
+    rep = layout_document(ir, tmp_path)
+    sig = next(c for c in rep.checks if c.rule_id == "LAY-SIGNATURE")
+    assert sig.status == "pass", (sig.actual, rep.render.notes)
+    assert any("7.3.5.5" in n for n in rep.render.notes)  # 首次排版署名被挤到下一面，已调整空行行距

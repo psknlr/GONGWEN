@@ -40,14 +40,15 @@ class GenreInfo:
     issue_vehicle: str | None = None
     variants: list[str] = field(default_factory=list)
 
-    def closing_candidates(self, direction: str | None = None, purpose: str | None = None) -> list[str]:
+    def closing_candidates(self, direction: str | None = None, purpose: str | None = None, include_acceptable: bool = True) -> list[str]:
+        """结束语候选；起草时只用首选（include_acceptable=False），检查时首选与可接受的都认可。"""
         c = self.closings or {}
         out: list[str] = []
         if direction and c.get("by_direction", {}).get(direction):
             out += c["by_direction"][direction]
         if purpose and c.get("by_purpose", {}).get(purpose):
             out += c["by_purpose"][purpose]
-        out += list(c.get("preferred", []) or []) + list(c.get("acceptable", []) or [])
+        out += list(c.get("preferred", []) or []) + (list(c.get("acceptable", []) or []) if include_acceptable else [])
         return list(dict.fromkeys(out))
 
 

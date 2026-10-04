@@ -24,7 +24,7 @@ PURPOSE_CUES: list[tuple[Purpose, tuple[str, ...]]] = [
     (Purpose.INSTRUCT, ("请求指示", "如何处理", "请示意见", "请上级明确")),
     (Purpose.REPLY_LOWER, ("批复", "答复下级", "回复下级请示", "对请示的答复")),
     (Purpose.REPORT, ("汇报", "报告情况", "反映情况", "进展情况", "工作情况", "上报情况", "报告…情况")),
-    (Purpose.REPLY_UPPER, ("回复上级询问", "答复上级")),
+    (Purpose.REPLY_UPPER, ("回复上级询问", "答复上级", "询问的报告", "问询的报告")),
     (Purpose.RECORD, ("会议纪要", "纪要", "会议议定", "办公会")),
     (Purpose.COMMEND, ("表彰", "通报批评", "批评", "通报表扬")),
     (Purpose.ISSUE_PLAN, ("印发方案", "印发", "下发方案", "印发办法", "印发制度", "印发细则")),
@@ -181,12 +181,32 @@ def extract_subject(text: str, genre: str | None) -> str:
     # “给××发函，商请……”“向××行文……”：收发文机关和行文动作不属于事由
     t = re.sub(r"^(给|向|致|对)[^，。]{1,30}?(发函|去函|致函|行文|发文|写信|去信|发个函|发一个函)[，,、]?", "", t)
     t = re.sub(r"^(向[^，。]{1,20}?)(申请|请求|报告|汇报|提出|请示)", r"\2", t)
+    # “答复市政府关于××询问的报告”：事由是“××情况”，答复对象与“询问”不属于事由
+    m = re.match(r"^(答复|回复)[^，。]{0,20}?关于(.+?)(的)?(询问|问询|有关问题|有关事项)?$", t)
+    if m:
+        t = m.group(2) + ("" if m.group(2).endswith("情况") else "情况")
     if genre == "报告":
         t = re.sub(r"^(报告|汇报)", "", t)
     elif genre == "请示":
         t = re.sub(r"^请示", "", t)
     t = re.sub(r"^关于", "", t)
     return t[:40] or "【待确认：事由】"
+
+
+_ADDRESS_LEAD = re.compile(r"(?:向|给|致|对|报送|呈报|主送|报|送|要求|答复|回复|商请|通知)$")
+
+
+def _addressed_organs(text: str) -> list[str]:
+    """需求中作为收文对象出现的机关（“向××”“给××”“要求××”“答复××”）；
+    “命名××为……”“表彰××”中的机关是事由的对象，不是主送机关。"""
+    out = []
+    for m in _ORGAN_RE.finditer(text):
+        raw = m.group(1)
+        name = re.sub(r"^(向|致|给|对|由|以|请|报|代|为|与|和|及|送|帮|写|起草|关于)+", "", raw)
+        lead = text[max(0, m.start() - 4) : m.start()] + raw[: len(raw) - len(name)]
+        if len(name) >= 3 and _ADDRESS_LEAD.search(lead) and name not in out:
+            out.append(name)
+    return out
 
 
 def _organs_in(text: str) -> list[str]:
@@ -256,7 +276,7 @@ class TaskModelingSkill(Skill):
         if recips:
             spec.recipients = slot([Organ(name=r).model_dump() for r in recips], "用户提供", "提示")
         else:
-            organs = [o for o in _organs_in(text) if o != issuer_name]
+            organs = [o for o in _addressed_organs(text) if o != issuer_name]
             generic = next((g for g in _GENERIC_ORGANS if g in text), None)
             if organs:
                 spec.recipients = slot([Organ(name=o).model_dump() for o in organs[:3]], "推断", "需求文本")

@@ -402,3 +402,132 @@
     draft_contains: [关于提供基层医疗示范点建设情况的复函, 贵局《示例市财政局关于商请提供基层医疗示范点建设情况的函》（示财函〔2026〕8号）收悉, 已建成基层医疗示范点8个, 特此函复]
     draft_not_contains: [请贵委提供, 为做好2026年预算编制工作, 请函复, 函商]
     numbers_sourced: true
+
+- id: GR-21
+  task_group: single
+  kind: pipeline
+  title: 印发类通知：通知正文只写印发事项，方案作为附件，标题加书名号
+  request: 起草一份印发基层医疗示范点建设工作方案的通知
+  hints: {recipients: 各区卫生健康局, issuer_type: 政府部门}
+  materials:
+    - name: 工作安排.md
+      text: |
+        2026年拟新建示范点12个。
+
+        各区卫生健康局要在2026年6月底前完成选址。
+
+        市卫生健康委负责统筹协调和技术指导。
+  accept: [task_confirm, outline_confirm]
+  expect:
+    stage: 人工送审
+    genre: 通知
+    draft_contains: [关于印发《基层医疗示范点建设工作方案》的通知, 现将《基层医疗示范点建设工作方案》印发给你们]
+    attachment_text_contains: [2026年拟新建示范点12个, 负责统筹协调]
+    draft_not_contains: [《印发]
+
+- id: GR-22
+  task_group: adversarial
+  kind: pipeline
+  title: 表彰通报：材料中没有表彰决定时不代为决定，留待补；先进事迹照材料写
+  request: 起草一份表彰2025年度基层医疗示范点建设先进单位的通报
+  hints: {recipients: 各区卫生健康局, issuer_type: 政府部门}
+  materials:
+    - name: 先进单位推荐情况.md
+      text: |
+        经各区推荐，甲区卫生健康局、乙区卫生健康局在2025年基层医疗示范点建设中成效突出，分别建成示范点3个和2个。
+  accept: [task_confirm, outline_confirm]
+  expect:
+    stage: 人工送审
+    genre: 通报
+    draft_contains: [分别建成示范点3个和2个, 【待补：表彰或批评决定, 特此通报]
+    draft_not_contains: [决定对, 予以通报表彰, 一、]
+    rules_absent_open: [GW-SEM-006]
+
+- id: GR-23
+  task_group: single
+  kind: pipeline
+  title: 批评通报：问题事实写入通报正文，不因含“滞后”被当作评价；没有要求时不留空泛待补
+  request: 起草一份关于部分区示范点建设进度滞后情况的通报
+  hints: {recipients: 各区卫生健康局, issuer_type: 政府部门}
+  materials:
+    - name: 督查情况.md
+      text: |
+        2026年6月督查发现，丙区、丁区示范点建设进度滞后，截至2026年5月31日仅完成年度任务的20%。
+  accept: [task_confirm, outline_confirm]
+  expect:
+    stage: 人工送审
+    draft_contains: [现将有关情况通报如下, 仅完成年度任务的20%]
+    draft_not_contains: [【待补：执行要求, 【待补：事实经过]
+
+- id: GR-24
+  task_group: single
+  kind: pipeline
+  title: 通告：周知事项来自材料的安排，开头“现将有关事项通告如下”，无主送机关
+  request: 起草一份关于示范点建设期间临时停诊的通告
+  hints: {issuer_type: 政府部门}
+  materials:
+    - name: 停诊安排.md
+      text: |
+        因示范点改造施工，甲区社区卫生服务中心拟于2026年7月1日至7月15日暂停门诊服务，期间就诊可前往乙区社区卫生服务中心。
+  accept: [task_confirm, outline_confirm]
+  expect:
+    stage: 人工送审
+    genre: 通告
+    draft_contains: [现将有关事项通告如下, 暂停门诊服务, 特此通告]
+    draft_not_contains: [【待补：主送机关, 【待补：应遵守或周知事项]
+
+- id: GR-25
+  task_group: adversarial
+  kind: pipeline
+  title: 决定：评审结果作依据，决定事项须来自真实研究决定；事由中的机关不当作主送机关
+  request: 起草一份关于命名甲区社区卫生服务中心为市级基层医疗示范点的决定
+  hints: {issuer_type: 政府部门}
+  materials:
+    - name: 评审结果.md
+      text: |
+        经专家评审，甲区社区卫生服务中心各项指标达到市级基层医疗示范点建设标准，评审得分92分。
+  accept: [task_confirm, outline_confirm]
+  expect:
+    stage: 人工送审
+    genre: 决定
+    draft_contains: [评审得分92分, 【待补：决定事项]
+    draft_not_contains: [一份关于命名, 本决定自印发之日起施行]
+
+- id: GR-26
+  task_group: single
+  kind: pipeline
+  title: 答复上级询问的报告：标题事由不重复“答复……关于”，行文方向按报告定为上行文
+  request: 起草一份答复市政府关于示范点建设进展询问的报告
+  hints: {recipients: 示例市人民政府, issuer_type: 政府部门}
+  materials:
+    - name: 情况说明.md
+      text: |
+        截至2025年12月31日，我委已建成基层医疗示范点8个，覆盖5个区。
+
+        2026年拟新建示范点12个，计划于2026年12月底前完成建设。
+  accept: [task_confirm, outline_confirm]
+  expect:
+    stage: 人工送审
+    genre: 报告
+    draft_contains: [关于示范点建设进展情况的报告, 特此报告]
+    draft_not_contains: [关于答复, 询问有关情况]
+
+- id: GR-27
+  task_group: single
+  kind: pipeline
+  title: 工作总结：主要工作与成效不重复同一事实，缺成效材料时留待补
+  request: 起草2025年基层医疗示范点建设工作总结
+  hints: {issuer_type: 政府部门}
+  materials:
+    - name: 情况说明.md
+      text: |
+        截至2025年12月31日，我委已建成基层医疗示范点8个，覆盖5个区。
+
+        目前存在设备老化、服务能力不足等问题。
+  accept: [task_confirm, outline_confirm]
+  expect:
+    stage: 人工送审
+    draft_contains: [现将2025年基层医疗示范点建设情况总结如下, 【待补：取得的成效]
+    section_contains:
+      主要工作: [已建成基层医疗示范点8个]
+      问题与不足: [设备老化]
