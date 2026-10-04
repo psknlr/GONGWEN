@@ -14,7 +14,7 @@ from typing import Any, Callable
 
 from ..harness.permissions import Principal
 from ..schemas.common import Clearance
-from .render import fmt_check, fmt_evidence, fmt_issues, fmt_status
+from .render import fmt_check, fmt_evidence, fmt_issues, fmt_status, visible
 
 HELP = """斜杠命令（人工通道）：
   /new <办文需求> [--to 主送机关] [--issuer 发文机关类型] [--genre 文种] [--matter 事项编号]
@@ -92,11 +92,14 @@ class HumanCommands:
         cmd, _, rest = line[1:].partition(" ")
         fn = getattr(self, f"c_{cmd}", None)
         if fn is None:
-            return f"未知命令：/{cmd}。输入 /help 查看可用命令"
+            return visible(f"未知命令：/{cmd}。输入 /help 查看可用命令")
+        # 输出中的建议、需求、文稿可能来自模型通道：控制字符一律显示为可见转义
         try:
-            return fn(rest.strip())
+            return visible(fn(rest.strip()))
         except (KeyError, ValueError, PermissionError, FileNotFoundError) as exc:
-            return f"未执行：{exc}"
+            return visible(f"未执行：{exc}")
+        except OSError as exc:  # 目录、无权读取等文件错误：给出中文说明，不中断对话
+            return visible(f"未执行：无法读取 {exc.filename or '文件'}（{'是目录，不是文件' if isinstance(exc, IsADirectoryError) else exc.strerror or exc}）")
 
     def c_help(self, rest: str) -> str:
         return HELP
@@ -259,6 +262,8 @@ class HumanCommands:
         if path is None:
             raise ValueError("用法：/check <文件>")
         path = path if path.is_absolute() else self.workspace / path
+        if not path.is_file():
+            raise FileNotFoundError(f"文件不存在或不是文件：{_split(rest)[0]}")
         ir = ir_from_file(path.name, path.read_bytes())
         return fmt_check(check_external(ir, self.engine.rt).to_dict())
 

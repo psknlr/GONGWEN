@@ -2,7 +2,17 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
+
+# 显示给人的文字不得含控制字符：回车、退格、ANSI 转义序列（\x1b[…）、C1 控制符和双向文本覆盖符
+# 都能让终端显示的内容与实际内容不一致（模型可借此把真实的修改建议“擦掉”）。换行与制表保留。
+_CONTROL_RE = re.compile("[\x00-\x08\x0b-\x1f\x7f-\x9f\u200e\u200f\u202a-\u202e\u2066-\u2069]")
+
+
+def visible(text: Any) -> str:
+    """把控制字符显示为可见转义（如 \\x1b、\\r），供终端显示给人；可重复调用。"""
+    return _CONTROL_RE.sub(lambda m: f"\\x{ord(m.group()):02x}" if ord(m.group()) < 0x100 else f"\\u{ord(m.group()):04x}", str(text))
 
 
 def fmt_status(s: dict[str, Any]) -> str:
@@ -29,14 +39,14 @@ def fmt_status(s: dict[str, Any]) -> str:
     models = s.get("models") or {}
     if models:
         lines.append("  模型：" + "　".join(f"{k}={v}" for k, v in models.items()))
-    return "\n".join(lines)
+    return visible("\n".join(lines))
 
 
 def fmt_issues(items: list[dict[str, Any]]) -> str:
     if not items:
         return "没有未决问题。"
     if len(items) == 1 and "message" in items[0]:
-        return items[0]["message"]
+        return visible(items[0]["message"])
     out = []
     for i in items:
         loc = i.get("location") or ""
@@ -49,19 +59,19 @@ def fmt_issues(items: list[dict[str, Any]]) -> str:
             out.append(f"    依据：{i['rule']}")
         if i.get("needs_human"):
             out.append("    （须人工判断）")
-    return "\n".join(out)
+    return visible("\n".join(out))
 
 
 def fmt_evidence(ev: dict[str, Any]) -> str:
     if "message" in ev:
-        return ev["message"]
+        return visible(ev["message"])
     lines = [f"{ev.get('location', '')}：{ev.get('text', '')}", f"确认状态：{ev.get('confirmation', '')}"]
     for r in ev.get("refs", []):
         lines.append(f"  - {r['label']}（{r['status']}）")
         for k, v in (r.get("detail") or {}).items():
             if v:
                 lines.append(f"      {k}：{v}")
-    return "\n".join(lines)
+    return visible("\n".join(lines))
 
 
 def fmt_check(d: dict[str, Any]) -> str:
@@ -77,4 +87,4 @@ def fmt_check(d: dict[str, Any]) -> str:
             lines.append(f"    依据：{i['rule']}")
     for u in d.get("unverifiable", []):
         lines.append(f"须人工核验：{u}")
-    return "\n".join(lines)
+    return visible("\n".join(lines))

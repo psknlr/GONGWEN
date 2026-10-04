@@ -22,6 +22,7 @@ from ..knowledge import kb
 from ..schemas.common import Severity
 from ..schemas.package import ReviewPackage
 from ..schemas.review import ReviewReport
+from .render import visible
 
 MAX_TEXT = 60_000
 
@@ -50,7 +51,8 @@ def human_next_steps(status: dict[str, Any], surface: str = "chat") -> list[str]
             )
     for p in status.get("pending_proposals", []):
         tips.append(f"【待人工采纳】修改建议 {p['proposal_id']}：{p['instruction'][:80]}（/apply {p['proposal_id']} 或 gongwen task apply {status['task_id']} {p['proposal_id']}）")
-    return tips
+    # 建议原文、文件名可能来自模型通道：控制字符显示为可见转义，转告给人时不能借回车或 ANSI 序列遮盖内容
+    return [visible(t) for t in tips]
 
 
 def build_agent_tools(
@@ -136,6 +138,9 @@ def build_agent_tools(
     def material_add(task_id: str, path: str, role: str = "material", description: str = "") -> dict[str, Any]:
         p = Path(path)
         p = (ws / p).resolve() if not p.is_absolute() else p.resolve()
+        # 数据目录存放各任务的文稿、材料与审计日志：不能借“添加材料”把其他任务的内容导入本任务
+        if any(p == d or d in p.parents for d in (Path(rt.config.environment.data_dir).resolve(), (ws / ".gongwen").resolve())):
+            raise PermissionError("不能把数据目录（任务、材料与日志所在目录）中的文件添加为材料")
         if not p.is_file():
             raise FileNotFoundError(f"文件不存在：{path}")
         if surface == "mcp" and not rt.config.mcp.allow_material_paths:

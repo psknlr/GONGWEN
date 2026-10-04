@@ -8,7 +8,7 @@ from ..schemas.ir import Block, DocumentIR
 from .profile import split_title
 
 CSS = """
-.gw-doc{font-family:"FangSong","仿宋","仿宋_GB2312","STFangsong","Songti SC",serif;font-size:16pt;line-height:28.99pt;color:var(--doc-ink,#111);
+.gw-doc{font-family:"FangSong","仿宋","仿宋_GB2312","STFangsong","Songti SC",serif;font-size:16pt;line-height:28.95pt;color:var(--doc-ink,#111);
   background:var(--doc-paper,#fff);width:156mm;max-width:100%;margin:0 auto;padding:12mm 10mm 16mm;box-sizing:content-box}
 .gw-doc .mark{color:#d00;text-align:center;font-family:"方正小标宋简体","STZhongsong","Songti SC",serif;font-size:30pt;line-height:1.2;margin:8mm 0 6mm;letter-spacing:.05em}
 .gw-doc .docno{display:flex;justify-content:center;gap:2em;padding-bottom:4mm;border-bottom:1.5px solid #d00}
