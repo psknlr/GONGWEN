@@ -73,6 +73,8 @@ def _is_header_line(line: str) -> str | None:
         return "doc_number"
     if line.endswith("文件") and len(line) <= 30:
         return "organ_mark"
+    if re.fullmatch(r"【待(编号|填写发文字号|补：发文字号)[^】]*】", line):
+        return "doc_number_placeholder"  # 本系统排版稿中发文字号的待填占位
     return None
 
 
@@ -145,7 +147,7 @@ def ir_from_text(text: str, *, doc_id: str = "EXT", genre: str | None = None, di
             m = re.search(r"签发人[：:]\s*(.+)$", lines[i])
             if m:
                 signers = [s for s in re.split(r"[\s、，]+", m.group(1)) if s]
-        else:
+        elif kind != "doc_number_placeholder":
             setattr(header, kind, lines[i])
         i += 1
     header.signers = signers
