@@ -29,7 +29,8 @@ DEADLINE_RE = re.compile(r"(\d{4}年\d{1,2}月(?:\d{1,2}日)?(?:前|底前|以�
 CONDITION_RE = re.compile(r"((?:如|若|确有|必要时|对于|凡)[^，。；]{1,30})")
 EXCEPTION_RE = re.compile(r"(除[^，。；]{1,30}外)")
 SUBJECT_RE = re.compile(r"^([一-鿿]{2,20}?(?:委员会|局|厅|办公室|处|科|中心|医院|学院|大学|部门|单位|各[一-鿿]{1,6}))(?:负责|牵头|要|应|将|拟|按照|组织)")
-REQUIREMENT_RE = re.compile(r"(负责|牵头|要|应当|须|必须|务必|请各|责任单位)")
+# 要求与授权性措施（“可以结合实际……”“鼓励……”也是措施，不能因没有“要”“须”而丢失）
+REQUIREMENT_RE = re.compile(r"(负责|牵头|(?<![主重需])要(?![素点])|应当|须|必须|务必|请各|责任单位|可以|鼓励|支持|提倡|引导|原则上)")
 MEASURE_ROLES = ("proposal", "plans", "items", "tasks", "next", "goal", "suggestions", "division", "schedule")
 DIVISION_RE = re.compile(r"(负责|牵头|配合|协助|分工|责任单位)")
 GOAL_RE = re.compile(r"(目标|拟新建|新建|建成|达到|覆盖率|提升至|提高到|实现)")
@@ -108,7 +109,7 @@ class OutlinePlanningSkill(Skill):
         substantive = [e for e in policies.items if is_substantive(e, sc.runtime.policies, subject)]
         # ---- 措施表（来源：材料中的拟议/安排类陈述）
         seen_measure_text: set[str] = set()
-        requirement_like = [f for f in current if f.kind == "text" and REQUIREMENT_RE.search(f.statement) and not f.progress == Progress.COMPLETED]
+        requirement_like = [f for f in current if REQUIREMENT_RE.search(f.statement) and f.progress not in (Progress.COMPLETED, Progress.ONGOING) and "table" not in f.tags and "computed" not in f.tags and "meeting_record" not in f.tags]
         for f in planned + requirement_like:
             if f.statement in seen_measure_text:
                 continue
@@ -136,6 +137,10 @@ class OutlinePlanningSkill(Skill):
         incoming = find_incoming(bundle)
         # 已作为措施来源或已被前面章节使用的事实，不在“要求”“保障”等章节重复陈述
         used: set[str] = set(measure_sources)
+        used_text: set[str] = {f.statement for f in usable if f.fact_id in measure_sources}
+
+        def fresh(fs: list[Fact]) -> list[Fact]:
+            return [f for f in fs if f.fact_id not in used and f.statement not in used_text]
         for role, heading, function in sections:
             sec = SectionPlan(section_id=sc.ids.next("S"), heading=heading, role=role)
             pick: list[Fact] = []
@@ -149,7 +154,7 @@ class OutlinePlanningSkill(Skill):
             elif role in MEASURE_ROLES:
                 measure_ids = assigned.get(role, [])[:8]
             elif role == "resources":
-                pick = (computed + [f for f in money if f.status == FactStatus.PROPOSED])[:6]
+                pick = fresh(computed + [f for f in money if f.status == FactStatus.PROPOSED])[:6]
                 if not pick and spec.resource_mentions:
                     plan.contract_missing.append("资源测算与来源")
                     plan.open_questions.append("请示涉及资源，但未提供测算明细和资金来源。请补充（系统不会自行补写金额）。")
@@ -167,7 +172,7 @@ class OutlinePlanningSkill(Skill):
             elif role == "pending":
                 pick = meeting_discussed
             elif role in ("requirements", "evaluation"):
-                pick = [f for f in usable if f.fact_id not in used and (DATE_RE.search(f.statement) or "报送" in f.statement or "联系人" in f.statement)]
+                pick = [f for f in fresh(usable) if DATE_RE.search(f.statement) or "报送" in f.statement or "联系人" in f.statement]
                 if doc_kind == "批复":
                     # 批复的执行要求只能来自决定类材料，不能把来文自身的陈述当作要求
                     pick = [f for f in pick if not (incoming and any(s.material_id == incoming.material_id for s in f.sources))]
@@ -176,6 +181,7 @@ class OutlinePlanningSkill(Skill):
                 # 函：必要背景 + 商洽事项；涉及经费时写明测算合计（明细见附件）
                 pick = (done_or_ongoing + planned)[:6] + [f for f in computed if f.kind == "money"][:1]
             used.update(f.fact_id for f in pick)
+            used_text.update(f.statement for f in pick)
             core_parts = list(dict.fromkeys(f.statement for f in pick))[:2] + [m.text for m in plan.measures if m.measure_id in measure_ids][:2]
             para = ParagraphPlan(
                 para_id=sc.ids.next("PP"),

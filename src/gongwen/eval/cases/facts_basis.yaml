@@ -451,3 +451,146 @@
     draft_contains: [经费合计100万元]
     draft_not_contains: [经费合计120万元]
     errors_contain: [同一事项]
+
+- id: FB-25
+  task_group: multi
+  kind: pipeline
+  title: 请示事项金额取测算合计，不取材料中的“项目总投资”
+  request: 起草一份向市政府申请基层医疗示范点建设经费的请示
+  hints: {recipients: 示例市人民政府, issuer_type: 政府部门}
+  materials:
+    - name: 情况说明.md
+      text: |
+        截至2025年12月31日，我委已建成基层医疗示范点8个，覆盖5个区。
+
+        2026年拟新建示范点12个，项目总投资拟为500万元。
+    - name: 经费测算表.csv
+      text: |
+        项目,金额（万元）
+        设备购置,60
+        场地改造,40
+        人员培训,20
+        合计,120
+  accept: [task_confirm, outline_confirm]
+  expect:
+    draft_contains: [拟申请安排经费120万元]
+    draft_not_contains: [拟申请安排经费500万元]
+
+- id: FB-26
+  task_group: single
+  kind: pipeline
+  title: 同一句中“已投入200万元”与“拟申请120万元”：按小句区分现状与申请事项
+  request: 起草一份向市政府申请基层医疗示范点建设经费的请示
+  hints: {recipients: 示例市人民政府, issuer_type: 政府部门}
+  materials:
+    - name: 情况说明.md
+      text: |
+        截至2025年12月31日，我委已建成基层医疗示范点8个。
+
+        2025年已投入建设资金200万元，2026年拟申请市级补助资金120万元。
+  accept: [task_confirm, outline_confirm]
+  expect:
+    draft_contains: [拟申请安排经费120万元]
+    draft_not_contains: [拟申请安排经费200万元]
+    numbers_sourced: true
+
+- id: FB-27
+  task_group: multi
+  kind: pipeline
+  title: 测算表首列为“序号”、合计行写作“合  计”：不把合计行当分项重复相加
+  request: 起草一份向市政府申请基层医疗示范点建设经费的请示
+  hints: {recipients: 示例市人民政府, issuer_type: 政府部门}
+  materials:
+    - name: 情况说明.md
+      text: |
+        2026年拟新建示范点12个。
+    - name: 经费测算表.csv
+      text: |
+        序号,项目,金额（万元）
+        1,设备购置,60
+        2,场地改造,40
+        3,人员培训,20
+        ,合  计,120
+  accept: [task_confirm, outline_confirm]
+  expect:
+    draft_contains: [经费合计120万元, 拟申请安排经费120万元]
+    draft_not_contains: [240万元]
+    calc_failures: 0
+
+- id: FB-28
+  task_group: adversarial
+  kind: pipeline
+  title: 两稿测算表数据不同：作为冲突交人工处理，不静默取其一
+  request: 起草一份向市政府申请基层医疗示范点建设经费的请示
+  hints: {recipients: 示例市人民政府, issuer_type: 政府部门}
+  materials:
+    - name: 情况说明.md
+      text: |
+        2026年拟新建示范点12个。
+    - name: 经费测算表（初稿）.csv
+      text: |
+        项目,金额（万元）
+        设备购置,300
+        场地改造,200
+        合计,500
+    - name: 经费测算表（调整稿）.csv
+      text: |
+        项目,金额（万元）
+        设备购置,60
+        场地改造,40
+        人员培训,20
+        合计,120
+  accept: [task_confirm, outline_confirm]
+  expect:
+    stage: 发现冲突
+    conflicts: true
+
+- id: FB-30
+  task_group: multi
+  kind: pipeline
+  title: 投资表与补助表各有合计：申请金额不替用户选择，留待补并列出候选
+  request: 起草一份向市政府申请基层医疗示范点建设经费的请示
+  hints: {recipients: 示例市人民政府, issuer_type: 政府部门}
+  materials:
+    - name: 情况说明.md
+      text: |
+        2026年拟新建示范点12个。
+    - name: 项目投资估算表.csv
+      text: |
+        项目,建设投资（万元）
+        土建工程,300
+        设备安装,200
+        合计,500
+    - name: 市级补助测算表.csv
+      text: |
+        项目,补助资金（万元）
+        设备购置,60
+        场地改造,40
+        人员培训,20
+        合计,120
+  accept: [task_confirm, outline_confirm]
+  expect:
+    stage: 人工送审
+    draft_contains: [【待补：申请金额（材料中有多个候选]
+    draft_not_contains: [拟申请安排经费500万元, 拟申请安排经费120万元]
+
+- id: FB-29
+  task_group: single
+  kind: pipeline
+  title: 材料中带序号的陈述句（“1.已培训……300人。”）是事实，不当作标题丢弃
+  request: 起草一份关于基层医疗示范点建设情况的报告
+  hints: {recipients: 示例市人民政府, issuer_type: 政府部门}
+  materials:
+    - name: 情况说明.md
+      text: |
+        关于基层医疗示范点建设的情况说明
+
+        一、2025年已建成基层医疗示范点8个，覆盖5个区。
+
+        1.已培训基层医务人员300人。
+
+        （二）2026年拟新建示范点12个。
+  accept: [task_confirm, outline_confirm]
+  expect:
+    draft_contains: [已培训基层医务人员300人, 2026年拟新建示范点12个]
+    draft_not_contains: [1.已培训, 一、2025年]

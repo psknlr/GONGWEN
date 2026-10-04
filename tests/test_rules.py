@@ -57,7 +57,10 @@ def test_text_utils():
 def test_progress_and_semantic_diff():
     assert progress_of("拟建设20个示范点") == Progress.PLANNED
     assert progress_of("已建成20个示范点") == Progress.COMPLETED
-    assert progress_of("确保按时完成建设任务") == Progress.NONE
+    # 目标与要求不是完成陈述：按拟议处理，事后改成“已完成”会被识别为状态升级
+    assert progress_of("确保按时完成建设任务") == Progress.PLANNED
+    assert progress_of("主要应用场景已建成") == Progress.COMPLETED  # “主要”“应用”不是要求性语境
+    assert progress_of("做好来访接待工作") == Progress.NONE  # “接待”不是拟议标记
     changes = semantic_diff("原则上可以开展试点，确有需要的经批准后实施", "必须全面实施")
     dims = {c.dimension for c in changes}
     assert {"义务强度", "实施范围", "条件与例外"} <= dims

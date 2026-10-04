@@ -13,11 +13,12 @@ from collections import defaultdict
 from ..harness.injection import UNTRUSTED_NOTICE, wrap_untrusted
 from ..harness.injection import detect as detect_injection
 from ..llm.base import ChatMessage, ModelRefused, ModelUnavailable
-from ..rules.semantics import progress_of
-from ..rules.textutil import COUNT_UNITS, MONEY_UNITS, extract_numbers, split_sentences
+from ..rules.semantics import meeting_decision, progress_at, progress_of
+from ..rules.textutil import COUNT_UNITS, MONEY_UNITS, NON_ADDITIVE_HEADER, extract_numbers, is_index_header, is_subtotal_row, is_total_row, label_column, split_sentences
 from ..knowledge.retrieval import coverage
 from ..schemas.common import Locator
 from ..schemas.facts import CalcCheck, Fact, FactConflict, FactLedger, FactStatus, Formula, Progress, Verification
+from ..parsing.base import LIST_MARKER_RE
 from ..schemas.sources import SourceBundle, SourceUnit
 from ..schemas.state import Stage
 from ..schemas.task import TaskSpec
@@ -28,14 +29,13 @@ _LEAD_WORDS = (
     "共计", "合计", "总计", "累计", "共有", "现有", "共", "约", "达到", "达", "为", "有", "拟建设", "拟新建", "拟", "建设", "新增",
     "安排", "申请", "需要", "需", "计划", "完成", "投入", "其中", "全年", "已", "已经", "建成", "实现", "预计", "总额", "金额",
 )
-_TOTAL_RE = re.compile(r"^(合计|总计|共计|小计)$")
 _UNIT_IN_HEADER = re.compile(r"[（(]\s*(万元|亿元|元|千元|个|家|人|项|%|％|台|套|次|平方米|公里)\s*[）)]")
 _AS_OF_RE = re.compile(r"截至\s*(\d{4}年(?:\d{1,2}月)?(?:\d{1,2}日)?(?:底|末)?)")
 _CALIBER_RE = re.compile(r"[（(]((?:不含|含|仅统计|仅含|按)[^）)]{1,30})[）)]|(仅统计[^，。；]{1,30})|(按[^，。；]{1,12}口径)")
 _TITLE_LIKE = re.compile(r"^(关于.{2,60}(说明|报告|请示|通知|方案|函|纪要|意见|汇报|总结|计划|测算表|明细表)|[^。！？；]{1,24})$")
 _SUBSTANTIVE = re.compile(
     r"(问题|不足|困难|短板|制约|隐患|滞后|缺口|原因|主要是|建立|开展|推进|实施|落实|组织|完善|建设|采购|购置|培训|改造|负责|牵头|要求|决定|议定|同意|^为"
-    r"|应当|必须|务必|须于|须在|要在|要于|确保|不得|严禁|完成|报送|提交)"
+    r"|应当|必须|务必|须于|须在|要在|要于|确保|不得|严禁|完成|报送|提交|可以|鼓励|支持|提倡|引导)"
 )
 _MEETING_UNDECIDED = re.compile(r"(未作决定|未作出决定|未决定|未议定|未形成(决定|意见|结论)|不同意|暂不|暂缓|待研究|再研究|另行研究|进一步研究|需进一步|会后研究|未达成一致)")
 _PROCESS_FIELDS = re.compile(r"(发文字号|文号|成文日期|签发人|印发日期|份号|落款日期)")
@@ -135,8 +135,8 @@ class FactLedgerSkill(Skill):
                         value=n.value,
                         unit=n.unit,
                         kind=n.kind,
-                        status=FactStatus.PROPOSED if progress_of(s) == Progress.PLANNED else FactStatus.RECORDED,
-                        progress=progress_of(s),
+                        status=FactStatus.PROPOSED if progress_at(s, n.start) == Progress.PLANNED else FactStatus.RECORDED,
+                        progress=progress_at(s, n.start),
                         sources=[req_loc],
                         tags=["request"],
                     )
@@ -181,6 +181,7 @@ class FactLedgerSkill(Skill):
         if u.kind == "heading" or _TITLE_LIKE.match(u.text.strip()):
             return  # 材料标题、层次标题不是事实陈述
         for s in split_sentences(u.text):
+            s = LIST_MARKER_RE.sub("", s, count=1)  # 去掉“一、”“1.”等序号，只保留陈述
             if detect_injection(s):
                 # 资料中的指令性语句只是数据：不作为事实，也不让其中的数字进入账本
                 ledger.unknowns.append(f"{u.locator.label()}：疑似指令性语句，未作为事实（{s[:30]}）")
@@ -198,15 +199,15 @@ class FactLedgerSkill(Skill):
                 as_of = m.group(1)
             loc = Locator(material_id=u.material_id, kind=u.kind, path=u.locator.path, excerpt=s[:80])
             if "meeting_record" in tags:
-                # 先看否定与待定语境：“会议未作决定”“暂不同意”“需进一步研究”不是议定事项
-                if _MEETING_UNDECIDED.search(s):
-                    tags = tags + ["meeting:discussion"]
-                elif any(w in s for w in ("决定", "议定", "同意", "明确", "确定")):
-                    tags = tags + ["meeting:decided"]
-                elif any(w in s for w in ("讨论", "建议", "提出", "认为", "发言")):
-                    tags = tags + ["meeting:discussion"]
+                # 先看否定与待定语境（“会议未作决定”“尚未确定”），再看“会议决定”；个人建议、意见不是议定事项
+                d = "discussion" if _MEETING_UNDECIDED.search(s) else meeting_decision(s)
+                if d:
+                    tags = tags + [f"meeting:{d}"]
             if nums:
                 for n in nums:
+                    # 状态按数字所在小句判断：“已建成8个，拟新建12个”中 8 是现状、12 是拟议
+                    n_prog = progress_at(s, n.start)
+                    n_status, _, n_ver = self._status_for(mat, n_prog)
                     ledger.facts.append(
                         Fact(
                             fact_id=sc.ids.next("F"),
@@ -217,10 +218,10 @@ class FactLedgerSkill(Skill):
                             kind=n.kind,
                             as_of=as_of,
                             caliber=caliber,
-                            status=status,
-                            progress=prog,
+                            status=n_status,
+                            progress=n_prog,
                             sources=[loc],
-                            verification=ver,
+                            verification=n_ver,
                             tags=tags,
                         )
                     )
@@ -253,19 +254,24 @@ class FactLedgerSkill(Skill):
             return
         rows = sorted({r for r, _ in grid})
         cols = sorted({c for _, c in grid})
-        header_row = rows[0]
+        cells = {r: [grid[(r, c)].text if (r, c) in grid else "" for c in cols] for r in rows}
+        # 表头：跳过表格上方只有一格的标题行（如“经费测算表（单位：万元）”）
+        header_row = next((r for r in rows if sum(1 for t in cells[r] if t.strip()) >= 2), rows[0])
+        body = [r for r in rows if r > header_row]
         header = {c: grid[(header_row, c)].text for c in cols if (header_row, c) in grid}
-        label_col = cols[0]
+        label_col = cols[label_column([header.get(c, "") for c in cols], [cells[r] for r in body])]
         status, tags, ver = self._status_for(mat, Progress.NONE)
         caliber = notes
         col_inputs: dict[int, list[Fact]] = defaultdict(list)
         totals: dict[int, list[Fact]] = defaultdict(list)
-        for r in rows[1:]:
+        for r in body:
             label_u = grid.get((r, label_col))
-            label = label_u.text if label_u else f"第{r}行"
-            is_total = bool(_TOTAL_RE.match(label.strip()))
+            label = label_u.text if label_u and label_u.text.strip() else next((t for t in cells[r] if t.strip() and _num(t) is None), f"第{r}行")
+            is_total = is_total_row(cells[r])
+            if is_subtotal_row(cells[r]):
+                continue  # 小计行既不是分项也不是总计
             for c in cols:
-                if c == label_col or (r, c) not in grid:
+                if c == label_col or (r, c) not in grid or is_index_header(header.get(c, "")):
                     continue
                 u = grid[(r, c)]
                 val = _num(u.text)
@@ -294,7 +300,7 @@ class FactLedgerSkill(Skill):
         # 合计核验 + 计算结果
         for c, inputs in col_inputs.items():
             head = header.get(c, "")
-            if not inputs or any(k in head for k in ("率", "占比", "%", "％", "单价", "序号", "年份")):
+            if not inputs or NON_ADDITIVE_HEADER.search(head):
                 continue
             total_val = round(sum(float(f.value) for f in inputs), 6)
             unit = inputs[0].unit

@@ -10,10 +10,9 @@ from ..schemas.facts import Progress
 from ..schemas.review import ConsistencyFinding, ConsistencyReport, IssueType, ReviewIssue
 from .base import CheckContext
 from .semantics import progress_of
-from .textutil import extract_numbers, same_quantity
+from .textutil import NON_ADDITIVE_HEADER, extract_numbers, is_subtotal_row, is_total_row, label_column, same_quantity
 
 _ATT_REF = re.compile(r"附件\s*(\d+)")
-_TOTAL_ROW = re.compile(r"^(合计|总计|小计|共计)$")
 
 
 def _num(s: str) -> float | None:
@@ -53,10 +52,13 @@ def check_tables(ctx: CheckContext) -> list[ReviewIssue]:
         if b.kind != "table" or not b.table or len(b.table) < 3:
             continue
         header, rows = b.table[0], b.table[1:]
-        total_rows = [r for r in rows if r and _TOTAL_ROW.match(r[0].strip())]
-        body_rows = [r for r in rows if r not in total_rows]
+        total_rows = [r for r in rows if r and is_total_row(r)]
+        body_rows = [r for r in rows if r not in total_rows and not is_subtotal_row(r)]
+        lc = label_column(header, body_rows)
         for tr in total_rows:
-            for c in range(1, len(header)):
+            for c in range(len(header)):
+                if c == lc or NON_ADDITIVE_HEADER.search(header[c]):
+                    continue  # 比率、单价、序号等列不可加总
                 vals = [_num(r[c]) for r in body_rows if c < len(r)]
                 vals = [v for v in vals if v is not None]
                 tv = _num(tr[c]) if c < len(tr) else None

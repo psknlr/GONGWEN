@@ -131,18 +131,20 @@ def parse_xlsx(material_id: str, data: bytes) -> ParseResult:
                         except Exception as exc:  # 无法求值时保留公式并提示
                             res.warnings.append(f"{ws_f.title}!{coord} 公式无法本地求值：{exc}")
                 text = _fmt(val)
-                out_row.append(text)
                 if c.row in hidden_rows or c.column in hidden_cols:
+                    # 隐藏行列只交准入扫描，不进入表格副本（否则会原样进入附件表格）
                     if text:
                         res.hidden.append(HiddenContent("隐藏行列", f"{ws_f.title}!{coord}={text}"))
                     continue
+                out_row.append(text)
                 if text:
                     u = b.add("sheet_cell", text, f"{ws_f.title}!{coord}", **attrs)
                     if c.comment is not None and c.comment.text.strip():
                         cu = b.add("comment", c.comment.text.strip(), f"{ws_f.title}!{coord}#comment", sheet=ws_f.title)
                         res.relations.append(SourceRelation(kind="note_of", src=cu.unit_id, dst=u.unit_id))
                         res.hidden.append(HiddenContent("单元格批注", c.comment.text.strip()))
-            grid.append(out_row)
+            if out_row:
+                grid.append(out_row)
         table = table_from_rows(material_id, tid, grid, ws_f.title, title=ws_f.title)
         # 表注（如“注：仅统计已验收项目”）
         for r in list(table.rows):

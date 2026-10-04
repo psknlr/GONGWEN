@@ -65,7 +65,7 @@ class CheckContext:
     ) -> ReviewIssue:
         meta = RULES[rule_id]
         sev = severity or effective_severity(rule_id, self.severity_overrides)
-        if meta.conditional and sev.rank > Severity.MINOR.rank and severity is None:
+        if meta.conditional and sev.rank > Severity.MINOR.rank:  # 条件性要求（“一般”“原则上”）最高只报一般问题
             sev = Severity.MINOR
         loc = IssueLocation(
             doc_id=self.ir.doc_id,

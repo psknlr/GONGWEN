@@ -57,8 +57,12 @@ class UnitBuilder:
         return u
 
 
+LIST_MARKER_RE = re.compile(r"^\s*(第[一二三四五六七八九十百]+[章节条]|[一二三四五六七八九十]+、|（[一二三四五六七八九十]+）|\d+[\.．、](?!\d)|（\d+）)\s*")
+
+
 def classify_line(text: str) -> str:
-    if HEADING_RE.match(text) and len(text) < 60:
+    """带序号的短行是层次标题；以句末标点结尾的是带序号的陈述句（“1.已培训医务人员300人。”），仍是正文。"""
+    if HEADING_RE.match(text) and len(text) < 60 and not text.rstrip().endswith(("。", "；", "！", "？")):
         return "heading"
     return "paragraph"
 
@@ -66,6 +70,10 @@ def classify_line(text: str) -> str:
 def table_from_rows(material_id: str, table_id: str, rows: list[list[str]], prefix: str, title: str = "") -> TableData:
     rows = [[(c or "").strip() for c in r] for r in rows]
     rows = [r for r in rows if any(c for c in r)]
+    # 表头上方只有一格的行是表名（如“经费测算表”“单位：万元”），不作为表头
+    while len(rows) > 1 and sum(1 for c in rows[0] if c) == 1 and sum(1 for c in rows[1] if c) >= 2:
+        title = next(c for c in rows[0] if c)
+        rows = rows[1:]
     header = rows[0] if rows else []
     return TableData(table_id=table_id, material_id=material_id, title=title, header=header, rows=rows[1:], locator_prefix=prefix)
 

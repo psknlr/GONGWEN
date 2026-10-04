@@ -169,13 +169,24 @@ def check_address_terms(ctx: CheckContext) -> list[ReviewIssue]:
     return out
 
 
+def _requested_objects(t: str) -> str:
+    """请求动词所在小句中被请求的对象；“用于设备购置、场地改造和人员培训”是经费用途，不是另外的请求事项。"""
+    parts = []
+    for m in REQUEST_VERB.finditer(t):
+        end = min([i for i in (t.find(d, m.end()) for d in "，；。,;") if i >= 0] or [len(t)])
+        seg = t[m.start() : end]
+        parts.append(re.split(r"用于|用作|主要用于", seg)[0])
+    return "；".join(parts)
+
+
 def detect_request_matters(texts: list[str]) -> dict[str, list[str]]:
     found: dict[str, list[str]] = {}
     for t in texts:
         if not REQUEST_VERB.search(t):
             continue
+        obj = _requested_objects(t)
         for cat, kws in MATTER_CATEGORIES.items():
-            if any(k in t for k in kws):
+            if any(k in obj for k in kws):
                 found.setdefault(cat, []).append(t)
     return found
 

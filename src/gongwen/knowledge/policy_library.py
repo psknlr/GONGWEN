@@ -178,7 +178,8 @@ class PolicyLibrary:
             if not region:
                 region_ok = None
                 reasons.append(f"地方性文件（{'、'.join(policy.regions)}），任务地域未确认")
-            elif not any(r in region or region in r for r in policy.regions):
+            elif not any(r in region for r in policy.regions):
+                # 只有文件地域等于或包含任务地域时适用：杭州市的文件不能作为浙江省全省事项的依据
                 region_ok = False
                 reasons.append(f"适用地域为{'、'.join(policy.regions)}，与任务地域“{region}”不符；不能把相似地区文件当作本单位依据")
         subject_ok: bool | None = True

@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import re
+from collections import Counter
 from dataclasses import dataclass, field
 
 from ..knowledge import kb
@@ -16,10 +17,10 @@ from ..schemas.facts import Fact, FactStatus, Progress
 from ..schemas.patch import SemanticChange
 from ..schemas.review import IssueType, ReviewIssue
 from .base import CheckContext
-from .textutil import DATE_RE, extract_numbers, same_quantity
+from .textutil import DATE_RE, clause_span, clauses, extract_numbers, mention_of, same_quantity
 
 APPROVAL_CLAIM = re.compile(r"(经[^，。；]{0,20}(批准|同意|审定|审议通过))|(已(获|经)?(批准|批复|同意|立项))|(研究决定)|(批准同意)")
-VERIFY_CLAIM = re.compile(r"(经(核实|核查|审核确认|审计确认))|(经核定)")
+VERIFY_CLAIM = re.compile(r"经(过)?([^，。；]{0,6}?)(认真|逐一|实地)?(核实|核查|查实|核定|核对|审核确认|审计确认)")
 AGGREGATE = re.compile(r"(共计|合计|总计|累计|总共|共有|总数)")
 
 
@@ -32,9 +33,16 @@ class SemFeatures:
     decision: str = ""  # discussion/decided/""
     hedges: set[str] = field(default_factory=set)
     dates: set[str] = field(default_factory=set)
+    broad: set[str] = field(default_factory=set)
+    narrow: set[str] = field(default_factory=set)
 
 
-_REQUIREMENT_CUES = ("确保", "要", "应当", "应", "须", "必须", "务必", "力争", "争取", "推动", "目标")
+# 要求性语境（“确保”“应当”“要”）；单字“要”“应”须排除“主要”“重要”“应急”“相应”等合成词
+_REQUIREMENT_RE = re.compile(
+    r"确保|应当|必须|务必|力争|争取|推动|目标|须|(?<![主重需纪摘概提只想紧不])要(?![素点闻害])|(?<![相适响反供对答呼感效理])应(?![急用对])"
+)
+# 拟议标记；“待”须排除“接待”“对待”“期待”等
+_PLANNED_RE = None
 
 
 _DONE_MARK = re.compile(r"(已经|业已|已)(经)?(新建|建成|完成|开展|实施|启动|投入|建设|落实|实现|新增|安排|拨付|下达|批准|同意|印发|出台|竣工|验收)")
@@ -52,35 +60,113 @@ def progress_of(text: str) -> Progress:
     或在没有要求性语境时出现“建成”“完成”等完成动词，才视为“已完成”。
     """
     lex = kb.lexicon()["progress"]
-    if any(w in text for w in lex["planned"]):
+    if _planned_re().search(text):
         return Progress.PLANNED
+    if any(w in text for w in lex["ongoing"] if w.startswith("已")):
+        return Progress.ONGOING  # “已启动”是推进中，不是已完成
     explicit = any(w in text for w in ("已", "已经", "业已"))
     done_verbs = any(w in text for w in lex["done"] if not w.startswith("已"))
-    requirement = any(w in text for w in _REQUIREMENT_CUES)
+    requirement = bool(_REQUIREMENT_RE.search(text))
     if explicit or (done_verbs and not requirement):
         return Progress.COMPLETED
     if any(w in text for w in lex["ongoing"]):
         return Progress.ONGOING
+    if done_verbs and requirement:
+        return Progress.PLANNED  # “确保建成12个”是目标要求，尚未完成
     return Progress.NONE
+
+
+def _planned_re() -> re.Pattern:
+    global _PLANNED_RE
+    if _PLANNED_RE is None:
+        words = sorted(kb.lexicon()["progress"]["planned"], key=len, reverse=True)
+        alts = [r"(?<![接对招期看款优善等])待(?![遇])" if w == "待" else re.escape(w) for w in words]
+        _PLANNED_RE = re.compile("|".join(alts))
+    return _PLANNED_RE
+
+
+def progress_at(text: str, pos: int) -> Progress:
+    """句中某个数字所在小句的进展：本小句没有进展标记时，承接前面小句的陈述
+    （“已建成8个，覆盖5个区”）；主语在前、谓语在后且后一小句没有自己的数字时，取后一小句
+    （“示范点12个，拟于2026年建成”）。避免“已建成8个，拟新建12个”整句判为同一状态。"""
+    a, z = clause_span(text, pos)
+    p = progress_of(text[a:z])
+    if p != Progress.NONE:
+        return p
+    spans = clauses(text)
+    for ca, cz in reversed([c for c in spans if c[1] <= a]):
+        q = progress_of(text[ca:cz])
+        if q != Progress.NONE:
+            return q
+    nxt = [c for c in spans if c[0] >= z]
+    if nxt:
+        ca, cz = nxt[0]
+        if not [m for m in extract_numbers(text[ca:cz]) if m.kind in ("money", "count", "percent", "measure")]:
+            return progress_of(text[ca:cz])
+    return Progress.NONE
+
+
+_MEETING_DECIDED = re.compile(r"会议(研究)?(决定|议定|同意|原则同意|明确|确定|要求|通过|批准)")
+_NEGATED_DECISION = re.compile(r"(未|尚未|没有|不|暂不|未能)(作出?|形成|予)?(决定|议定|同意|批准|通过|明确|确定)|(未作决定|未达成一致|待研究|再研究|另行研究|进一步研究|会后研究|暂缓)")
+
+
+def meeting_decision(text: str) -> str:
+    """会议记录语句的决策状态：decided / discussion / ""。
+
+    先看否定与待定（“会议未作决定”“经费来源尚未确定”），再看“会议决定……”；
+    其余按先出现者判断：“张某建议进一步明确分工”是建议，不是议定事项。
+    """
+    lex = kb.lexicon()["decision"]
+    if _NEGATED_DECISION.search(text):
+        return "discussion"
+    if _MEETING_DECIDED.search(text):
+        return "decided"
+    first = {}
+    for kind, words in (("decided", lex["decided"]), ("discussion", lex["discussion"])):
+        pos = [text.find(w) for w in words if w in text]
+        if pos:
+            first[kind] = min(pos)
+    if not first:
+        return ""
+    return min(first, key=first.get)
+
+
+def obligation_words(text: str) -> list[str]:
+    """义务强度词；单字“应”“要”“可”“须”“需”排除合成词（应急、相应、主要、可能、需求等）。"""
+    out = []
+    for m in kb.obligation_pattern().finditer(text):
+        w, a, z = m.group(0), m.start(), m.end()
+        prev, nxt = text[a - 1 : a], text[z : z + 1]
+        if w == "应" and (prev in "相适响反供对答呼感效理" or nxt in "急用对"):
+            continue
+        if w == "要" and (prev in "主重需纪摘概提只想紧不" or nxt in "素点闻害"):
+            continue
+        if w == "可" and (nxt in "能行靠见观信爱口" or prev in "认许宁不"):
+            continue
+        if w == "需" and nxt in "求":
+            continue
+        if w == "研究" and prev in "经":
+            continue
+        out.append(w)
+    return out
 
 
 def features(text: str) -> SemFeatures:
     lex = kb.lexicon()
     f = SemFeatures()
-    words = kb.obligation_pattern().findall(text)
+    words = obligation_words(text)
     # “不得”“禁止”等禁止性用语也计入义务强度
     if words:
         f.obligation_words = words
         f.obligation = max(kb.obligation_strength(w) for w in words)
     f.progress = progress_of(text)
-    if any(w in text for w in lex["scope"]["broad"]):
+    f.broad = {w for w in lex["scope"]["broad"] if w in text}
+    f.narrow = {w for w in lex["scope"]["narrow"] if w in text}
+    if f.broad:
         f.scope = "broad"
-    elif any(w in text for w in lex["scope"]["narrow"]):
+    elif f.narrow:
         f.scope = "narrow"
-    if any(w in text for w in lex["decision"]["decided"]):
-        f.decision = "decided"
-    elif any(w in text for w in lex["decision"]["discussion"]):
-        f.decision = "discussion"
+    f.decision = meeting_decision(text)
     f.hedges = {h for h in lex["hedges"] if h in text}
     if re.search(r"除[^，。；]{1,30}外", text):
         f.hedges.add("除……外")
@@ -92,13 +178,18 @@ def semantic_diff(before: str, after: str) -> list[SemanticChange]:
     a, b = features(before), features(after)
     out: list[SemanticChange] = []
     if a.obligation_words or b.obligation_words:
-        if abs(a.obligation - b.obligation) >= 0.5:
+        # 比较增删的义务词，而不是整句最大值：“可以”改“必须”时，句中原有的“必须”不掩盖这一变化
+        added = Counter(b.obligation_words) - Counter(a.obligation_words)
+        removed = Counter(a.obligation_words) - Counter(b.obligation_words)
+        up = max((kb.obligation_strength(w) for w in added), default=0.0)
+        down = max((kb.obligation_strength(w) for w in removed), default=0.0)
+        if (added or removed) and abs(up - down) >= 0.5:
             out.append(
                 SemanticChange(
                     dimension="义务强度",
-                    before="、".join(a.obligation_words) or "（无）",
-                    after="、".join(b.obligation_words) or "（无）",
-                    direction="增强" if b.obligation > a.obligation else "减弱",
+                    before="、".join(removed.elements()) or "（无）",
+                    after="、".join(added.elements()) or "（无）",
+                    direction="增强" if up > down else "减弱",
                 )
             )
     if a.progress != b.progress and Progress.NONE not in (a.progress, b.progress):
@@ -114,8 +205,10 @@ def semantic_diff(before: str, after: str) -> list[SemanticChange]:
     elif a.progress == Progress.PLANNED and b.progress == Progress.NONE and progress_of(after) != Progress.PLANNED:
         # 删除“拟”字但未出现完成词：语义由拟议变为陈述，需确认
         out.append(SemanticChange(dimension="事实状态", before=a.progress.value, after="陈述（未标明拟议）", direction="升级", severity="重要"))
-    if a.scope == "narrow" and b.scope == "broad":
-        out.append(SemanticChange(dimension="实施范围", before="试点/部分", after="全面/全部", direction="扩大"))
+    new_broad = b.broad - a.broad
+    if new_broad and (a.narrow - b.narrow or (a.scope == "narrow" and b.scope == "broad")):
+        # 新增“全面”“全部”等用语且删去了“试点”“选取”等限定：实施范围扩大
+        out.append(SemanticChange(dimension="实施范围", before="、".join(sorted(a.narrow)) or "试点/部分", after="、".join(sorted(new_broad)), direction="扩大"))
     if a.decision == "discussion" and b.decision == "decided":
         out.append(SemanticChange(dimension="决策状态", before="讨论/建议", after="决定/议定", direction="升级", severity="阻断送审"))
     lost = a.hedges - b.hedges
@@ -148,9 +241,18 @@ def check_fact_status(ctx: CheckContext) -> list[ReviewIssue]:
     if not ctx.ledger or not ctx.features.fact_ledger:
         return out
     for b, s in ctx.ir.iter_sentences():
-        p = progress_of(s.text)
         for f in _facts_for(ctx, s):
             ev = [EvidenceRef(kind="fact", id=f.fact_id)]
+            # 按事实所在小句判断进展：同句中的“将进一步”“计划”不掩盖“全部建成”
+            m = mention_of(s.text, float(f.value), f.unit) if isinstance(f.value, (int, float)) else None
+            if m is not None:
+                p = progress_at(s.text, m.start)
+                a, z = clause_span(s.text, m.start)
+                clause = s.text[a:z]
+                sm = mention_of(f.statement, float(f.value), f.unit)
+                src_clause = f.statement[slice(*clause_span(f.statement, sm.start))] if sm else f.statement
+            else:
+                p, clause, src_clause = progress_of(s.text), s.text, f.statement
             if "example" in f.tags:
                 out.append(ctx.issue("GW-FACT-005", IssueType.EXAMPLE_AS_FACT, f"{f.fact_id} 来自示例/模板数据，不能作为本次事项事实", block=b, sentence=s, evidence=ev, evidence_text=_source_excerpt(f)))
                 continue
@@ -158,7 +260,7 @@ def check_fact_status(ctx: CheckContext) -> list[ReviewIssue]:
                 out.append(ctx.issue("GW-FACT-006", IssueType.CONFLICT_USED, f"{f.fact_id} 状态为“{f.status.value}”，未核清前不得使用", block=b, sentence=s, evidence=ev, evidence_text=_source_excerpt(f), needs_human=True))
                 continue
             planned = f.status == FactStatus.PROPOSED or f.progress == Progress.PLANNED
-            new_done = done_marks(s.text) - done_marks(f.statement)
+            new_done = done_marks(clause) - done_marks(src_clause)
             if planned and (p in (Progress.COMPLETED, Progress.ONGOING) or new_done):
                 out.append(
                     ctx.issue(
@@ -203,6 +305,9 @@ def check_approval_claims(ctx: CheckContext) -> list[ReviewIssue]:
         m = APPROVAL_CLAIM.search(s.text)
         if not m:
             continue
+        a, _ = clause_span(s.text, m.start())
+        if re.search(r"(须|需|需要|应|应当|必须|要|报|报请|提请|待|拟)经?$", s.text[a : m.start()].strip()) or re.search(r"(须|需|应当?|必须|报请?|提请)经", s.text[a : m.end()]):
+            continue  # “确需延期的，须经××批准”是程序要求，不是“已获批准”的陈述
         approved = [f for f in _facts_for(ctx, s) if f.status == FactStatus.APPROVED and f.approval_ref]
         if not approved:
             out.append(
@@ -225,13 +330,13 @@ def _sourced(ctx: CheckContext, mention, refs_facts: list[Fact]) -> tuple[bool, 
     for f in pools:
         if isinstance(f.value, (int, float)) and same_quantity(mention, float(f.value), f.unit):
             return True, f
-    # 依据原文中出现的数字（如引用条款中的期限）
-    if ctx.policies:
-        for e in ctx.policies.items:
-            if mention.raw.replace(" ", "") in e.quote:
-                return True, None
-    if ctx.task and mention.raw.replace(" ", "") in ctx.task.request_text:
-        return True, None
+    # 依据原文、任务说明中出现的数字（按数值与单位比对，不做子串匹配：“200万元”不因“1200万元”而有来源）
+    texts = [e.quote for e in ctx.policies.items] if ctx.policies else []
+    if ctx.task:
+        texts.append(ctx.task.request_text)
+    for t in texts:
+        if any(same_quantity(mention, n.value, n.unit) for n in extract_numbers(t)):
+            return True, None
     return False, None
 
 
@@ -292,18 +397,16 @@ def check_meeting_decisions(ctx: CheckContext) -> list[ReviewIssue]:
     out: list[ReviewIssue] = []
     if ctx.ir.genre != "纪要":
         return out
-    decided_words = kb.lexicon()["decision"]["decided"]
-    discussion_words = kb.lexicon()["decision"]["discussion"]
     for b, s in ctx.ir.iter_sentences():
-        if not any(w in s.text for w in ("会议决定", "会议议定", "会议同意", "会议明确", "会议要求", "会议确定")):
+        claim = re.sub(r"现将会议议定事项", "", s.text)  # 纪要开头的固定说法不是议定内容
+        if not any(w in claim for w in ("会议决定", "会议议定", "会议同意", "会议明确", "会议要求", "会议确定")):
             continue
         facts = _facts_for(ctx, s)
         if not facts:
             out.append(ctx.issue("GW-SEM-004", IssueType.DECISION_UPGRADE, "该议定事项未关联会议记录来源，请核对是否确已议定", block=b, sentence=s, needs_human=True, severity=Severity.MAJOR))
             continue
         for f in facts:
-            src = " ".join(l.excerpt for l in f.sources) + f.statement
-            if any(w in src for w in discussion_words) and not any(w in src for w in decided_words):
+            if meeting_decision(f.statement) == "discussion":
                 out.append(
                     ctx.issue(
                         "GW-SEM-004",

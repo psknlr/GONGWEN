@@ -116,6 +116,7 @@ def check_relative_time(ctx: CheckContext) -> list[ReviewIssue]:
     out: list[ReviewIssue] = []
     words = kb.lexicon()["relative_time"]
     for b, s, t in _texts(ctx):
+        t = re.sub(r"[\d一二三四五六七八九十]日前", "", t)  # “6月30日前”是期限，不是相对时间“日前”
         hit = next((w for w in words if w in t), None)
         if hit:
             out.append(ctx.issue("GW-STYLE-003", IssueType.RELATIVE_TIME, f"“{hit}”为相对时间，公文中应写明具体的年、月、日", block=b, sentence=s, needs_human=True))

@@ -15,10 +15,10 @@ from typing import Callable
 from ..harness.injection import UNTRUSTED_NOTICE
 from ..llm.base import ChatMessage, ModelRefused, ModelUnavailable
 from ..rules import CheckContext, run_checks
-from ..rules.semantics import semantic_diff
-from ..rules.textutil import extract_numbers, same_quantity
+from ..rules.semantics import progress_of, semantic_diff
+from ..rules.textutil import clause_span, extract_numbers, mention_of, same_quantity
 from ..schemas.common import EvidenceRef, sha256_text
-from ..schemas.facts import FactLedger, FactStatus, Verification
+from ..schemas.facts import FactLedger, FactStatus, Progress, Verification
 from ..schemas.ir import AttachmentNote, DocumentIR, Sentence
 from ..schemas.patch import FactChange, Patch, PatchSet, RecheckResult
 from ..schemas.review import IssueType, ReviewReport
@@ -52,12 +52,28 @@ TRANSFORMS: dict[str, Callable[[str], str]] = {
 }
 
 
+def _anchor(f) -> str:
+    """事实属性的核心词，用于判断未引用该事实的句子是否在说同一件事。"""
+    a = f.attribute or ""
+    if a.startswith("合计·"):
+        return "合计"
+    a = a.split("·")[0]
+    return a[-4:] if len(a) > 4 else a
+
+
 def _downgrade(text: str, ledger: FactLedger, fact_id: str) -> str:
     f = ledger.get(fact_id)
     nums = extract_numbers(text)
     if f is not None and f.statement and all(isinstance(f.value, (int, float)) and same_quantity(n, float(f.value), f.unit) for n in nums if n.kind == f.kind):
         src = f.statement.strip()
         return src if src.endswith(("。", "！", "？")) else src + "。"
+    # 只改该事实所在的小句：同句中“已建成8个”等真实完成的内容保持不变
+    m = mention_of(text, float(f.value), f.unit) if f is not None and isinstance(f.value, (int, float)) else None
+    if m is not None:
+        a, z = clause_span(text, m.start)
+        clause = text[a:z]
+        fixed = planned_form(clause) if progress_of(clause) != Progress.PLANNED else clause
+        return text[:a] + fixed + text[z:]
     t = re.sub(r"已经|已", "", text, count=1)
     return planned_form(t)
 
@@ -288,7 +304,8 @@ class RevisionSkill(Skill):
         f.value = float(change.new_value) if isinstance(change.new_value, (int, float)) or re.fullmatch(r"-?\d+(\.\d+)?", str(change.new_value)) else change.new_value
         if change.unit:
             f.unit = change.unit
-        f.status = FactStatus.VERIFIED
+        if f.status != FactStatus.PROPOSED:
+            f.status = FactStatus.VERIFIED  # 人工更正的现状数据视为已核实；拟议内容改了数仍是拟议，不因更正而升级
         f.verification = Verification(method="人工变更", by=change.by, note=f"{olds['__before__']} → {f.display_value()}；{change.reason}")
         # 重新计算依赖它的计算结果（如合计）
         for dep in ledger.dependents(change.fact_id):
@@ -307,14 +324,23 @@ class RevisionSkill(Skill):
         values = {k: v for k, v in olds.items() if not k.startswith("__")}
         changed_ids = set(values)
         for b, s in ir.iter_sentences():
-            hit_refs = [r.id for r in s.refs if r.id in changed_ids]
-            mentions = extract_numbers(s.text)
+            hit_refs = {r.id for r in s.refs if r.id in changed_ids}
+            # 按位置替换（“8个”不会改到“18个”里），从后往前替换以保持位置有效
+            edits: dict[int, tuple[int, str]] = {}
+            for m in extract_numbers(s.text):
+                for fid, (old_v, unit) in values.items():
+                    nf = ledger.get(fid)
+                    if nf is None or not same_quantity(m, old_v, unit) or m.unit not in (unit, ""):
+                        continue
+                    # 未引用该事实的句子：只在同一小句中出现该事实的属性名时才联动（“开展培训8次”不是“示范点8个”）
+                    a, z = clause_span(s.text, m.start)
+                    if fid in hit_refs or _anchor(nf) in s.text[a:z]:
+                        edits[m.start] = (m.end, nf.display_value())
+                        break
             new_text = s.text
-            for fid, (old_v, unit) in values.items():
-                nf = ledger.get(fid)
-                for m in mentions:
-                    if same_quantity(m, old_v, unit) and (fid in hit_refs or m.kind == nf.kind):
-                        new_text = new_text.replace(m.raw.strip(), nf.display_value(), 1)
+            for start in sorted(edits, reverse=True):
+                end, val = edits[start]
+                new_text = new_text[:start] + val + new_text[end:]
             if new_text != s.text:
                 ps.patches.append(
                     Patch(

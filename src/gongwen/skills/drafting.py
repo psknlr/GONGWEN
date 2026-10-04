@@ -16,8 +16,8 @@ from typing import Any
 from ..harness.injection import UNTRUSTED_NOTICE, detect as detect_injection
 from ..knowledge import kb
 from ..llm.base import ChatMessage, ModelRefused, ModelUnavailable
-from ..rules.semantics import APPROVAL_CLAIM, progress_of, semantic_diff
-from ..rules.textutil import extract_numbers, same_quantity
+from ..rules.semantics import APPROVAL_CLAIM, progress_at, progress_of, semantic_diff
+from ..rules.textutil import MONEY_UNITS, clause_span, extract_numbers, mention_of, same_quantity
 from ..schemas.common import EvidenceRef, IdAllocator
 from ..schemas.facts import Fact, FactLedger, FactStatus, Progress
 from ..schemas.genre import GenreDecision
@@ -271,9 +271,31 @@ class Drafter:
         """请示事项：只使用账本中的金额，不自行补写。"""
         if self.doc_kind != "请示":
             return []
-        computed = [f for f in self.ledger.facts if f.status == FactStatus.COMPUTED and f.kind == "money"]
-        proposed = [f for f in self.ledger.facts if f.status == FactStatus.PROPOSED and f.kind == "money"]
-        target = (proposed or computed)[:1]
+        money = [f for f in self.ledger.facts if f.kind == "money" and "example" not in f.tags and f.status not in (FactStatus.CONFLICT, FactStatus.UNKNOWN)]
+
+        def asked(f: Fact) -> bool:
+            # 金额所在小句明确是申请事项（“拟申请安排120万元”），而不是“已投入200万元”“总投资500万元”
+            m = mention_of(f.statement, float(f.value), f.unit) if isinstance(f.value, (int, float)) else None
+            if m is None:
+                return False
+            a, b = clause_span(f.statement, m.start)
+            return bool(re.search(r"申请|请求|恳请|商请|拟安排|需安排|请予安排", f.statement[a:b]))
+
+        tiers = [
+            [f for f in money if "table" not in f.tags and asked(f)],  # 明确的申请金额
+            [f for f in money if f.status == FactStatus.COMPUTED],  # 测算表合计
+            [f for f in money if f.status == FactStatus.PROPOSED and "table" not in f.tags],  # 其他拟议金额
+        ]
+        target: list[Fact] = []
+        for tier in tiers:
+            values = {round(float(f.value) * MONEY_UNITS.get(f.unit, 1.0), 6) for f in tier if isinstance(f.value, (int, float))}
+            if len(values) == 1:
+                target = tier[:1]
+                break
+            if len(values) > 1:
+                # 材料中有多个候选金额：不替用户选择，留待补并列出候选
+                cands = "、".join(dict.fromkeys(f.display_value() for f in tier))
+                return [self.sent(self.placeholder("request_amount", f"申请金额（材料中有多个候选：{cands}，请确认）"), [EvidenceRef(kind="fact", id=f.fact_id) for f in tier], "请求")]
         if not target:
             return [self.sent(self.placeholder("request_amount", "申请金额、资金来源及用途（请提供测算材料）"), [], "请求")]
         f = target[0]
@@ -487,13 +509,23 @@ class DraftingSkill(Skill):
         if detect_injection(text):
             return "包含疑似注入语句"
         facts = [d.ledger.get(r) for r in refs if d.ledger.get(r)]
+        quotes = [d.policies.get(r).quote for r in refs if d.policies.get(r)]
         for n in extract_numbers(text):
             if not any(isinstance(f.value, (int, float)) and same_quantity(n, float(f.value), f.unit) for f in facts):
-                if not any(n.raw in (d.policies.get(r).quote if d.policies.get(r) else "") for r in refs):
+                if not any(same_quantity(n, q.value, q.unit) for t in quotes for q in extract_numbers(t)):
                     return f"数字“{n.raw}”没有对应证据"
-        p = progress_of(text)
-        if any((f.status == FactStatus.PROPOSED or f.progress == Progress.PLANNED) for f in facts) and p in (Progress.COMPLETED, Progress.ONGOING):
-            return "拟议事项被写成已开展/已完成"
+        # 确定性草稿中的措施引用必须保留：模型不能靠去掉引用来绕开语义强度校验
+        kept = set(refs)
+        block_measures = {r.id for sent in block.sentences for r in sent.refs if r.kind == "measure"} | {sent.measure_id for sent in block.sentences if sent.measure_id}
+        if block_measures - kept:
+            return "删除了措施引用"
+        for f in facts:
+            if not (f.status == FactStatus.PROPOSED or f.progress == Progress.PLANNED):
+                continue
+            m = mention_of(text, float(f.value), f.unit) if isinstance(f.value, (int, float)) else None
+            p = progress_at(text, m.start) if m else progress_of(text)
+            if p in (Progress.COMPLETED, Progress.ONGOING):
+                return "拟议事项被写成已开展/已完成"
         if APPROVAL_CLAIM.search(text) and not any(f.status == FactStatus.APPROVED for f in facts):
             return "出现未绑定审批记录的批准表述"
         if re.search(r"〔\d{4}〕\d+号", text) and not any(r.startswith("P") for r in refs):
@@ -505,6 +537,10 @@ class DraftingSkill(Skill):
                     if ch.direction in ("增强", "扩大", "删除", "升级"):
                         return f"{ch.dimension}{ch.direction}"
         old = block.text()
+        # 与确定性草稿逐段比较：义务强度、范围、条件、事实与决策状态只能保持或减弱
+        for ch in semantic_diff(old, text):
+            if ch.direction in ("增强", "扩大", "删除", "升级"):
+                return f"{ch.dimension}{ch.direction}"
         if "【待" in old and "【待" not in text:
             return "删除了待补占位"
         return ""
