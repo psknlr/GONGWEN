@@ -63,7 +63,8 @@ def test_proposals_and_requests_rendered_with_visible_controls(tmp_path, capsys)
     cmds.current = st.task_id
     for out in (cmds.run("/proposals"), cmds.run("/status"), fmt_status(eng.status(st.task_id)), *human_next_steps(eng.status(st.task_id))):
         assert "\x1b" not in out and "\r" not in out
-    assert "999万元\\x0d\\x1b[2K统一标点" in cmds.run("/proposals")
+    # 主编排器提交时已去掉控制字符（显示层转义作为第二道防线，见上一个测试）：被隐藏的内容照样可见
+    assert "999万元[2K统一标点" in cmds.run("/proposals")
     eng.create_task("起草\x1b[2K通知", by=user)
     ws = ["-C", str(tmp_path)]
     for argv in (["task", "proposals", st.task_id], ["task", "status", st.task_id], ["task", "list"]):
@@ -71,7 +72,7 @@ def test_proposals_and_requests_rendered_with_visible_controls(tmp_path, capsys)
         out = capsys.readouterr().out
         assert "\x1b" not in out and "\r" not in out
     cli([*ws, "task", "list"])
-    assert "起草\\x1b[2K通知" in capsys.readouterr().out
+    assert "起草[2K通知" in capsys.readouterr().out
 
 
 def test_tty_approver_shows_arguments(monkeypatch, capsys):

@@ -413,7 +413,7 @@ def _text_rows(text: str) -> list[list[str]]:
 
 def _fabricated_numbers(case: dict[str, Any], text: str) -> list[str]:
     """输出中出现、而需求与材料中没有的数字（含由材料合计复算得到的数也视为有来源）。"""
-    from ..rules.textutil import extract_numbers
+    from ..rules.textutil import extract_numbers, is_subtotal_row, is_total_row
 
     source = case["request"] + "\n" + _material_text(case)
     nums = extract_numbers(source)
@@ -426,14 +426,16 @@ def _fabricated_numbers(case: dict[str, Any], text: str) -> list[str]:
             for attr, v in changes.items():
                 if r and str(r[0]).startswith(attr) and len(r) > 1:
                     r[1] = v
-        for c in range(1, max((len(r) for r in rows), default=0)):
+        for c in range(0, max((len(r) for r in rows), default=0)):
             vals = []
             for r in rows[1:]:
                 try:
-                    if c < len(r) and not str(r[0]).strip().startswith(("合计", "总计", "小计")):
-                        vals.append(float(r[c]))
+                    v = float(str(r[c]).replace(",", "")) if c < len(r) else None
                 except ValueError:
-                    pass
+                    continue
+                known.add(v)  # 表格单元格本身就是材料中的数
+                if not is_total_row([str(x) for x in r]) and not is_subtotal_row([str(x) for x in r]):
+                    vals.append(v)
             if vals:
                 known.add(float(sum(vals)))
     out = []

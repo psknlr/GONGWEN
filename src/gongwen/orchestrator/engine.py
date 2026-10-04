@@ -322,6 +322,11 @@ class Engine:
             return None
         if pending:
             return None
+        if items and all(a.decision == AdmissionDecision.FORBID for a in items) and not st.options.get("forbidden_ack"):
+            # 已添加的材料全部禁止进入：不能悄悄改为“无材料起草”，先停下补充可处理的材料（或由人决定不用材料继续）
+            st.options["need_material_details"] = [f"{a.material_id} {a.filename}：禁止进入当前环境（{'；'.join(a.reasons)}）" for a in items]
+            log.append("material.all_forbidden", {"materials": [a.material_id for a in items]}, stage=st.stage.value)
+            return Stage.NEED_MATERIAL
         agg = aggregation_risk([a for a in items if a.decision != AdmissionDecision.FORBID])
         if agg and not st.options.get("aggregation_ack"):
             st.options["aggregation_ack"] = "pending"
@@ -752,6 +757,9 @@ class Engine:
                     g.ask_user = False
             sc.save("task_spec", spec)
         elif k == CheckpointKind.NEED_MATERIAL:
+            items = AdmissionList.load(self.store, st.task_id)
+            if items and all(a.decision == AdmissionDecision.FORBID for a in items):
+                st.options["forbidden_ack"] = by.id  # 人工决定不使用材料继续（仅依据办文需求起草，缺口留待补）
             for name in ("task_spec", "source_bundle", "genre_decision", "policy_pack", "fact_ledger", "outline"):
                 st.artifacts.pop(name, None)
                 p = self.store.task_dir(st.task_id) / "artifacts" / f"{name}.json"

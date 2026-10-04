@@ -499,3 +499,18 @@ def test_workbench_rejects_malformed_requests(workbench):
     assert code == 400
     st = eng.load_state(st.task_id)
     assert st.stage == Stage.HUMAN_REVIEW and st.current_version == 1
+
+
+def test_all_forbidden_materials_pause_for_more_material(tmp_path):
+    """已添加的材料全部禁止进入：停在“待补材料”，不悄悄改为无材料起草；由人决定后才继续。"""
+    eng = make_engine(tmp_path)
+    user = default_user()
+    st = eng.create_task("写一份向主管部门申请基层医疗示范点建设经费的报告", by=user, hints={"recipients": "示例市人民政府", "issuer_type": "政府部门"})
+    eng.add_material(st.task_id, "情况说明.md", "绝密★1年\n内部情况说明。".encode(), by=user, declared=Clearance.PUBLIC)
+    st = eng.advance(st.task_id, by=user, auto_accept=AA)
+    assert st.stage == Stage.NEED_MATERIAL
+    cp = next(c for c in st.pending_checkpoints() if c.kind == CheckpointKind.NEED_MATERIAL)
+    assert any("禁止进入" in d for d in cp.details)
+    eng.resolve_checkpoint(st.task_id, cp.cp_id, cp.options[0].key, by=user)
+    st = eng.advance(st.task_id, by=user, auto_accept=AA)
+    assert st.stage not in (Stage.ADMISSION, Stage.NEED_MATERIAL)

@@ -22,7 +22,8 @@ DeepSeek Harness（`dsh`，基于 Cordis 插件框架，“一切皆插件”）
 2. 在 dsh 的工具插件中以子进程调用 gongwen 的机器可读接口：
    - `gongwen check <文件> --json`：检查已有文稿；
    - `gongwen exec "<需求>" --material … --clearance 公开 --json`：无头推进，输出 NDJSON 事件流，
-     最后一行 `{"type": "result", "exit_code": …}`；退出码 3 表示停在须人工处理的审核节点。
+     最后一行 `{"type": "result", "exit_code": …, "forbidden_materials": […]}`；退出码 3 表示停在须人工处理的审核节点，
+     4 表示禁止进入（所给材料全部未获准入时不会推进）或超出权限。
 
 模型配置可直接使用 DeepSeek（`[model] provider = "deepseek"`，密钥取 `DEEPSEEK_API_KEY`），
 并把 `api.deepseek.com` 加入 `[egress] allowed_hosts`；公共云模型的 `max_clearance` 保持“公开”。
