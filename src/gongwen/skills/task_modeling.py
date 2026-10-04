@@ -12,7 +12,7 @@ from typing import Any
 
 from ..harness.injection import UNTRUSTED_NOTICE, wrap_untrusted
 from ..knowledge import kb
-from ..llm.base import ChatMessage, ModelRefused, ModelUnavailable
+from ..llm.base import ChatMessage, ModelCallFailed, ModelRefused, ModelUnavailable
 from ..schemas.common import slot
 from ..schemas.sources import SourceBundle
 from ..schemas.state import Stage
@@ -365,8 +365,8 @@ class TaskModelingSkill(Skill):
                 object_refs=[m.material_id for m in (bundle.materials if bundle else [])],
             )
             data = resp.json()
-        except (ModelUnavailable, ModelRefused, ValueError) as exc:
-            sc.note("skill.model_skipped", {"skill": self.name, "reason": str(exc)})
+        except (ModelUnavailable, ModelRefused, ModelCallFailed, ValueError) as exc:
+            sc.model_fallback(self.name, exc)
             return
         corpus = text + ("\n" + "\n".join(u.text for u in bundle.units) if bundle else "")
         for p in data.get("purposes") or []:

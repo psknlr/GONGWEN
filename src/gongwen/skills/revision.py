@@ -13,7 +13,7 @@ from copy import deepcopy
 from typing import Callable
 
 from ..harness.injection import UNTRUSTED_NOTICE
-from ..llm.base import ChatMessage, ModelRefused, ModelUnavailable
+from ..llm.base import ChatMessage, ModelCallFailed, ModelRefused, ModelUnavailable
 from ..rules import CheckContext, run_checks
 from ..rules.semantics import progress_of, semantic_diff
 from ..rules.textutil import clause_span, extract_numbers, mention_of, same_quantity
@@ -423,8 +423,8 @@ class RevisionSkill(Skill):
         try:
             resp = sc.router.call("heavy", [ChatMessage("user", f"修改意见：{instruction}\n\n文稿逐句：\n{json.dumps(sentences, ensure_ascii=False)}")], system=system, json_schema=schema, clearances=sc.clearances, purpose="revision", template_id="revision.v1", object_refs=[s['sid'] for s in sentences])
             edits = resp.json().get("edits", [])
-        except (ModelUnavailable, ModelRefused, ValueError) as exc:
-            sc.note("skill.model_skipped", {"skill": self.name, "reason": str(exc)})
+        except (ModelUnavailable, ModelRefused, ModelCallFailed, ValueError) as exc:
+            sc.model_fallback(self.name, exc)
             ps.escalated_issue_ids.append("INSTRUCTION_NEEDS_HUMAN")
             return ps
         for e in edits:

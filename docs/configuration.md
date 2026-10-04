@@ -29,6 +29,8 @@ name = ""
 base_url = ""
 api_key_env = ""                # 从哪个环境变量读取密钥（密钥不写入配置文件）
 max_clearance = "公开"          # 允许发送给该模型的最高材料属性
+timeout = 90                    # 单次请求超时（秒）；Claude 适配使用流式，按两次数据之间的间隔计
+max_retries = 2                 # 限流、服务端错误、连接失败与超时的自动重试次数
 
 [models.reviewer]               # 具名模型，供路由使用
 provider = "zhipu"
@@ -93,9 +95,20 @@ module = "my_unit.plugins:UnitPlugin"
 | `openai_compat` | 自行填写 `base_url` | `OPENAI_COMPAT_API_KEY`（可改） | 自行填写 |
 | `anthropic` | `https://api.anthropic.com` | `ANTHROPIC_API_KEY` | `claude-opus-5-5`（须 `pip install "gongwen[anthropic]"`） |
 
-模型名称与地址会随服务商更新，以服务商当前文档为准。使用任何外部模型都要：把主机加入 `[egress] allowed_hosts`；公共云模型的 `max_clearance` 保持“公开”；本地部署模型（Ollama、vLLM）在单位批准环境中可按制度提高 `max_clearance`。
+模型名称与地址会随服务商更新，以服务商当前文档为准。使用任何外部模型都要：把主机加入 `[egress] allowed_hosts`；公共云模型的 `max_clearance` 保持“公开”；本地部署模型（Ollama、vLLM）在单位批准环境中可按制度提高 `max_clearance`。只有本机回环地址（`localhost`、`127.0.0.1`、`::1`）免列白名单；局域网主机（包括 `*.local`）同样要列入。
 
-Anthropic 适配默认启用服务端拒答回退（beta `server-side-fallback-2026-07-01`，`fallbacks="default"`），并在读取内容前检查 `stop_reason == "refusal"`；拒答会显式记录，不当作空结果成功。
+适配层只向网关核准的地址发送请求：不跟随 HTTP 重定向（重定向按调用失败处理）；本机地址不经环境变量中的 `HTTP(S)_PROXY` 代理。
+
+调用失败的处理：
+
+| 情形 | 处理 |
+|---|---|
+| 未配置模型、密钥变量未设置、网关不允许出网 | 显示“未就绪”或拒绝原因，技能走确定性路径 |
+| 模型拒答 | 审计记录 `model.response`（refused），技能记录 `skill.model_skipped` 后回退确定性路径 |
+| 输出不是 JSON，或结构与约定不符（如段落不是对象） | 技能记录 `skill.model_skipped` 后回退确定性路径 |
+| 限流、服务端错误、连接失败、超时（已按 `max_retries` 重试）、重定向、响应报文异常 | 审计记录 `model.error`；办文流程中的模型步骤改用确定性路径，任务提示写明“模型接口调用失败”；按修改意见修订转人工处理；对话模式报告后可继续输入 |
+
+Anthropic 适配默认启用服务端拒答回退（beta `server-side-fallback-2026-07-01`，`fallbacks="default"`），并在读取内容前检查 `stop_reason == "refusal"`；拒答会显式记录，不当作空结果成功。请求使用流式并取最终消息，长输出不会因非流式请求在生成完成前超时。对话模式的系统提示与工具集在会话内保持不变、历史只追加（回传的思考块绑定此前的会话前缀）；`api_key_env` 显式指定的变量未设置时视为配置错误，使用默认的 `ANTHROPIC_API_KEY` 时也可由 SDK 的其他凭据来源提供。
 
 ## 四、单位配置档
 

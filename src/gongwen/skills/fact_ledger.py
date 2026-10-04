@@ -12,7 +12,7 @@ from collections import defaultdict
 
 from ..harness.injection import UNTRUSTED_NOTICE, wrap_untrusted
 from ..harness.injection import detect as detect_injection
-from ..llm.base import ChatMessage, ModelRefused, ModelUnavailable
+from ..llm.base import ChatMessage, ModelCallFailed, ModelRefused, ModelUnavailable
 from ..rules.semantics import meeting_decision, progress_at, progress_of
 from ..rules.textutil import COUNT_UNITS, MONEY_UNITS, NON_ADDITIVE_HEADER, extract_numbers, is_index_header, is_subtotal_row, is_total_row, label_column, split_sentences
 from ..knowledge.retrieval import coverage
@@ -506,8 +506,8 @@ class FactLedgerSkill(Skill):
         try:
             resp = sc.router.call("light", [ChatMessage("user", blocks)], system=system, json_schema=schema, clearances=sc.clearances, purpose="fact_extraction", template_id="fact_ledger.v1", object_refs=[u.unit_id for u in narrative])
             data = resp.json()
-        except (ModelUnavailable, ModelRefused, ValueError) as exc:
-            sc.note("skill.model_skipped", {"skill": self.name, "reason": str(exc)})
+        except (ModelUnavailable, ModelRefused, ModelCallFailed, ValueError) as exc:
+            sc.model_fallback(self.name, exc)
             return
         units = {u.unit_id: u for u in narrative}
         existing = {f.statement for f in ledger.facts}

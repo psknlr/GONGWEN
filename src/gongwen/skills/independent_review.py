@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 
 from ..harness.injection import UNTRUSTED_NOTICE
-from ..llm.base import ChatMessage, ModelRefused, ModelUnavailable
+from ..llm.base import ChatMessage, ModelCallFailed, ModelRefused, ModelUnavailable
 from ..rules import CheckContext, checker_names, run_checks
 from ..rules.registry import RULESET_VERSION
 from ..schemas.common import EvidenceRef, Severity
@@ -124,8 +124,8 @@ class IndependentReviewSkill(Skill):
         try:
             resp = sc.router.call("reviewer", [ChatMessage("user", user)], system=system, json_schema=schema, clearances=sc.clearances, purpose="semantic_review", template_id="review.v1", object_refs=[s["sid"] for s in sentences])
             data = resp.json()
-        except (ModelUnavailable, ModelRefused, ValueError) as exc:
-            sc.note("skill.model_skipped", {"skill": self.name, "reason": str(exc)})
+        except (ModelUnavailable, ModelRefused, ModelCallFailed, ValueError) as exc:
+            sc.model_fallback(self.name, exc)
             return None
         out: list[ReviewIssue] = []
         for item in data.get("issues", []):

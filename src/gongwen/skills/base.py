@@ -77,6 +77,17 @@ class SkillContext:
     def note(self, type_: str, payload: dict[str, Any]) -> None:
         self.log.append(type_, payload, stage=self.state.stage.value)
 
+    def model_fallback(self, skill: str, exc: Exception) -> None:
+        """可选的模型步骤失败（拒答、接口故障、输出格式不符）：记录并改用确定性路径；
+        接口故障另记入任务提示，让人知道本稿未经模型辅助，而不是悄悄降级。"""
+        self.note("skill.model_skipped", {"skill": skill, "reason": str(exc)[:200]})
+        from ..llm.base import ModelCallFailed
+
+        if isinstance(exc, ModelCallFailed):
+            msg = f"{skill}：模型接口调用失败，已改用确定性路径（{str(exc)[:80]}）"
+            if msg not in self.state.errors:
+                self.state.errors.append(msg)
+
 
 class Skill:
     name: ClassVar[str] = ""

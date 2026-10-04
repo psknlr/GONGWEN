@@ -15,10 +15,10 @@ from typing import Any
 
 from ..harness.injection import UNTRUSTED_NOTICE, detect as detect_injection
 from ..knowledge import kb
-from ..llm.base import ChatMessage, ModelRefused, ModelUnavailable
+from ..llm.base import ChatMessage, ModelCallFailed, ModelRefused, ModelUnavailable
 from ..rules.semantics import APPROVAL_CLAIM, progress_at, progress_of, semantic_diff
 from ..rules.textutil import MONEY_UNITS, clause_span, extract_numbers, mention_of, same_quantity
-from ..schemas.common import EvidenceRef, IdAllocator
+from ..schemas.common import EvidenceRef, IdAllocator, sha256_text
 from ..schemas.facts import Fact, FactLedger, FactStatus, Progress
 from ..schemas.genre import GenreDecision
 from ..schemas.ir import Attachment, AttachmentNote, Block, DocumentIR, Header, Imprint, Placeholder, Sentence, Signature
@@ -532,8 +532,8 @@ class DraftingSkill(Skill):
         try:
             resp = sc.router.call("heavy", [ChatMessage("user", user)], system=system, json_schema=schema, clearances=sc.clearances, purpose="drafting", template_id="drafting.v1", object_refs=sorted(allowed))
             data = resp.json()
-        except (ModelUnavailable, ModelRefused, ValueError) as exc:
-            sc.note("skill.model_skipped", {"skill": self.name, "reason": str(exc)})
+        except (ModelUnavailable, ModelRefused, ModelCallFailed, ValueError) as exc:
+            sc.model_fallback(self.name, exc)
             return
         by_plan = {b.plan_ref: b for b in paras}
         accepted, rejected = 0, []
@@ -549,7 +549,7 @@ class DraftingSkill(Skill):
                 reason = self._validate(d, text, refs, b)
                 if reason:
                     ok = False
-                    rejected.append({"para_id": p.get("para_id"), "reason": reason, "text_sha": hash(text)})
+                    rejected.append({"para_id": p.get("para_id"), "reason": reason, "text_sha": sha256_text(text)})
                     break
                 new_sents.append(Sentence(sid=d.ids.next("s"), text=text, refs=[EvidenceRef(kind=allowed[r], id=r) for r in refs], function=b.sentences[0].function if b.sentences else "", measure_id=next((r for r in refs if allowed[r] == "measure"), None), origin="model"))
             if ok and new_sents:

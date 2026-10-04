@@ -753,13 +753,14 @@ def test_refusal_is_logged_and_falls_back(tmp_path, mock, provider):
 
 @pytest.mark.parametrize("provider", PROVIDERS)
 def test_http_500_fails_task_visibly(tmp_path, mock, provider):
+    """可选的模型步骤接口故障：改用确定性路径继续办理，并在任务提示中写明（不悄悄降级）。"""
     mock.faults["drafting"] = "http500"
     eng = model_engine(tmp_path, mock, provider)
     user = default_user()
     st = start(eng, user)
     st = advance_auto(eng, user, st.task_id)
-    assert st.stage == Stage.FAILED
-    assert "模型接口调用失败" in st.exception_reason and "500" in st.exception_reason
+    assert st.stage == Stage.HUMAN_REVIEW and eng.current_ir(st).meta["drafter"] == "deterministic"
+    assert any("模型接口调用失败" in e and "500" in e for e in st.errors)
     errs = events(eng, st.task_id, {"model.error"})
     assert len(errs) == 1 and errs[0]["payload"]["purpose"] == "drafting"
     raw_log = (eng.store.task_dir(st.task_id) / "events.jsonl").read_text(encoding="utf-8")
@@ -775,7 +776,7 @@ def test_timeout_fails_task_visibly(tmp_path, mock, provider):
     t0 = time.monotonic()
     st = advance_auto(eng, user, st.task_id)
     assert time.monotonic() - t0 < 10
-    assert st.stage == Stage.FAILED and "模型接口调用失败" in st.exception_reason
+    assert st.stage == Stage.HUMAN_REVIEW and any("模型接口调用失败" in e for e in st.errors)
     assert len(mock.calls("drafting")) == 1  # max_retries=0：不重试
 
 
@@ -803,7 +804,7 @@ def test_openai_malformed_http_body_is_a_call_failure(tmp_path, mock, fault):
     user = default_user()
     st = start(eng, user)
     st = advance_auto(eng, user, st.task_id)
-    assert st.stage == Stage.FAILED and "模型接口调用失败" in st.exception_reason
+    assert st.stage == Stage.HUMAN_REVIEW and any("模型接口调用失败" in e for e in st.errors)
 
 
 def test_openai_retries_transient_errors(tmp_path, mock):
@@ -909,7 +910,7 @@ def test_revision_instruction_with_model(tmp_path, mock, provider):
 
 
 def test_cli_revise_reports_model_failure(tmp_path, mock, capsys):
-    """命令行人工修订时模型接口故障：给出原因并以“处理失败”退出，而不是打印堆栈。"""
+    """命令行按修改意见修订时模型接口故障：不打印堆栈，修改意见转人工处理，文稿不变。"""
     (tmp_path / ".gongwen").mkdir()
     (tmp_path / ".gongwen" / "config.toml").write_text(
         f'[environment]\nunit_name = "示例市卫生健康委员会"\nregion = "示例省"\n[layout]\nrender_check = false\n'
@@ -921,11 +922,13 @@ def test_cli_revise_reports_model_failure(tmp_path, mock, capsys):
     st = start(eng, user)
     st = run_to_review(eng, user, st.task_id)
     mock.faults["revision"] = "http500"
+    before = eng.current_ir(st).body_text()
     capsys.readouterr()
-    rc = cli(["-C", str(tmp_path), "--user", user.id, "task", "revise", st.task_id, "--instruction", "补充经费投入情况"])
+    cli(["-C", str(tmp_path), "--user", user.id, "task", "revise", st.task_id, "--instruction", "补充经费投入情况"])
     err = capsys.readouterr().err
-    assert rc == 1 and "模型接口调用失败" in err and "Traceback" not in err
-    assert eng.load_state(st.task_id).current_version == 1
+    assert "Traceback" not in err
+    assert eng.current_ir(eng.load_state(st.task_id)).body_text() == before  # 正文不变
+    assert any(e["payload"].get("skill") == "gongwen-targeted-revision" for e in events(eng, st.task_id, {"skill.model_skipped"}))
 
 
 # ====================================================================== (d) 对话代理
@@ -1204,7 +1207,7 @@ def test_redirect_to_other_host_is_not_followed(tmp_path, mock, provider):
         st = start(eng, user)
         st = advance_auto(eng, user, st.task_id)
         assert other.requests == []  # 材料不会经重定向发往未获准的主机
-        assert st.stage == Stage.FAILED and "模型接口调用失败" in st.exception_reason
+        assert st.stage == Stage.HUMAN_REVIEW and any("模型接口调用失败" in e for e in st.errors)
         with pytest.raises(ModelCallFailed, match="HTTP 307，重定向至 http://127.0.0.2"):
             eng.rt.router().call("heavy", [ChatMessage("user", "测试")], system="你是中国内地公文起草助手", clearances=[Clearance.PUBLIC])
         assert other.requests == []
