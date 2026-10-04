@@ -1016,3 +1016,100 @@
     genre: 意见
     draft_contains: [关于加强基层医疗人才队伍建设的指导意见, 现就加强基层医疗人才队伍建设提出如下意见, （一）各区要实施, （二）各区要建立, 以上意见，请结合实际认真贯彻执行]
     draft_not_contains: [如无不妥, 指导意见的意见]
+
+- id: GR-52
+  task_group: single
+  kind: pipeline
+  title: 知照性通知（启用印章）：不设“主要任务”“工作要求”层次，正文直接陈述告知事项
+  request: 起草一份关于启用新印章的通知
+  hints: {recipients: 各区卫生健康局、委机关各处室, issuer_type: 政府部门}
+  materials:
+    - name: 印章.md
+      text: |
+        经市人民政府批准，自2026年5月1日起启用“示例市卫生健康委员会”新印章，原印章同时废止。
+  accept: [task_confirm, outline_confirm]
+  expect:
+    stage: 人工送审
+    genre: 通知
+    draft_contains: [示例市卫生健康委员会关于启用新印章的通知, 原印章同时废止, 特此通知]
+    draft_not_contains: [主要任务, 工作要求, 现就启用新印章有关事项通知如下]
+
+- id: GR-53
+  task_group: single
+  kind: pipeline
+  title: 表彰决定：事迹作依据在前，材料中的“研究决定授予”作决定事项，不再留决定事项待补
+  request: 起草一份关于表彰2025年度基层医疗示范点建设先进集体的决定
+  hints: {recipients: 各区卫生健康局, issuer_type: 政府部门}
+  materials:
+    - name: 表彰.md
+      text: |
+        2025年，全市基层医疗示范点建设成效明显，甲区卫生健康局、乙区卫生健康局工作突出。
+
+        经委党组会议研究，决定授予甲区卫生健康局、乙区卫生健康局“2025年度基层医疗示范点建设先进集体”称号。
+  accept: [task_confirm, outline_confirm]
+  expect:
+    stage: 人工送审
+    genre: 决定
+    draft_contains: [工作突出, 决定授予甲区卫生健康局、乙区卫生健康局]
+    draft_not_contains: [【待补：决定事项, 现作出如下决定]
+
+- id: GR-54
+  task_group: single
+  kind: pipeline
+  title: 工作计划（按工作方案体例）：开头“制定本计划”，多个时间节点归入进度安排，“6月底前完成”不当作已完成
+  request: 起草2026年基层医疗卫生工作计划
+  hints: {issuer_type: 政府部门}
+  materials:
+    - name: 计划.md
+      text: |
+        2026年计划新建基层医疗示范点12个。
+
+        6月底前完成选址，12月底前全部建成并投入使用。
+
+        各区卫生健康局负责本辖区示范点建设。
+  accept: [task_confirm, outline_confirm]
+  expect:
+    stage: 人工送审
+    genre: 工作方案
+    draft_contains: [2026年基层医疗卫生工作计划, 制定本计划, 进度安排, 6月底前完成选址]
+    draft_not_contains: [制定本方案, 【待补：进度安排]
+
+- id: GR-55
+  task_group: multi
+  kind: pipeline
+  title: 联合行文：标题并列发文机关，主办机关署名在前，联合机关简称按地域补全；需求中的“与××联合印发”不进入事由，提示会签
+  request: 与市财政局联合印发关于做好2026年基层医疗示范点建设资金管理工作的通知
+  hints: {recipients: 各区卫生健康局、各区财政局, issuer_type: 政府部门}
+  materials:
+    - name: 资金.md
+      text: |
+        各区要将示范点建设资金纳入预算管理，专款专用。
+
+        各区财政局要于2026年6月30日前拨付补助资金。
+  accept: [task_confirm, outline_confirm]
+  expect:
+    stage: 人工送审
+    genre: 通知
+    draft_contains: [示例市卫生健康委员会　示例市财政局关于做好2026年基层医疗示范点建设资金管理工作的通知, 专款专用]
+    draft_not_contains: [联合印发, 关于与市财政局]
+    procedures: [CONSULTATION]
+    signature_organs: [示例市卫生健康委员会, 示例市财政局]
+
+- id: GR-56
+  task_group: single
+  kind: pipeline
+  title: 报送进展情况的报告：事由去掉“向市政府报送”，“尚未启动”归入存在的问题
+  request: 起草一份向市政府报送2026年第一季度示范点建设进展情况的报告
+  hints: {recipients: 示例市人民政府, issuer_type: 政府部门}
+  materials:
+    - name: 进展.md
+      text: |
+        截至2026年3月31日，全市已完成示范点选址9个，占年度任务的75%。
+
+        丙区尚未启动选址工作。
+  accept: [task_confirm, outline_confirm]
+  expect:
+    stage: 人工送审
+    genre: 报告
+    draft_contains: [示例市卫生健康委员会关于2026年第一季度示范点建设进展情况的报告, 存在的问题, 丙区尚未启动选址工作]
+    draft_not_contains: [向市政府报送, 报送2026年]

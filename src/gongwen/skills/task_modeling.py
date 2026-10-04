@@ -171,6 +171,29 @@ _ADDRESSING = re.compile(r"(请|帮我|帮忙)?(给|向|致|对)[^，。]{1,30}?
 _SUBJECT_VERBS = re.compile(r"(申请|请求|报告|汇报|部署|开展|商请|印发|整理|做好|加强|推进|关于)")
 
 
+# 联合行文：“与××联合印发”“会同××发文”
+_JOINT = re.compile(r"(?:与|和|同|会同)([^，。；]{2,60}?)(?:联合|共同)(?:印发|发文|行文|下发|发布|起草|制定)?|会同([^，。；]{2,60}?)(?:印发|发文|行文|下发|发布)")
+
+
+def joint_issuers(text: str, issuer: str = "") -> list[str]:
+    """需求中的联合发文机关（不含主办机关）；简称“市财政局”按主办机关的地域前缀补全。"""
+    m = _JOINT.search(text)
+    if not m:
+        return []
+    prefix = re.match(r"^(.{1,10}?[省市县区])", issuer or "")
+    out: list[str] = []
+    for part in re.split(r"[、和及]", m.group(1) or m.group(2)):
+        om = _ORGAN_RE.fullmatch(part.strip())
+        if not om:
+            continue
+        name = om.group(1)
+        if prefix and name[0] in "省市县区" and prefix.group(1).endswith(name[0]):
+            name = prefix.group(1) + name[1:]
+        if name != issuer and name not in out:
+            out.append(name)
+    return out
+
+
 def extract_subject(text: str, genre: str | None) -> str:
     # 多个小句时，选含文种词或主要办文动词的小句；其余小句（补充事实、对文号日期的要求等）不属于事由
     clauses = [c.strip() for c in re.split(r"[，,；;。！!？?：:\n]", text) if c.strip()]
@@ -192,15 +215,17 @@ def extract_subject(text: str, genre: str | None) -> str:
                 t = t[: -len(name)]
                 break
     t = t.rstrip("的").strip()
+    # “与××联合印发关于……”：联合发文机关和行文动作不属于事由
+    t = re.sub(r"^(与|和|同|会同)[^，。；]{2,60}?(联合|共同)(印发|发文|行文|下发|发布|起草|制定)?|^会同[^，。；]{2,60}?(印发|发文|行文|下发|发布)", "", t)
     # “给××发函，商请……”“向××行文……”：收发文机关和行文动作不属于事由
     t = re.sub(r"^(给|向|致|对)[^，。]{1,30}?(发函|去函|致函|行文|发文|写信|去信|发个函|发一个函)[，,、]?", "", t)
-    t = re.sub(r"^(向|给|对)[^，。]{1,20}?(申请|请求|报告|汇报|提出|请示|询问|咨询|商请|告知|征求)", r"\2", t)
+    t = re.sub(r"^(向|给|对)[^，。]{1,20}?(申请|请求|报告|汇报|报送|呈报|上报|提出|请示|询问|咨询|商请|告知|征求)", r"\2", t)
     # “答复市政府关于××询问的报告”：事由是“××情况”，答复对象与“询问”不属于事由
     m = re.match(r"^(答复|回复)[^，。]{0,20}?关于(.+?)(的)?(询问|问询|有关问题|有关事项)?$", t)
     if m:
         t = m.group(2) + ("" if m.group(2).endswith("情况") else "情况")
     if genre == "报告":
-        t = re.sub(r"^(报告|汇报)", "", t)
+        t = re.sub(r"^(报告|汇报|报送|呈报|上报)", "", t)
     elif genre == "请示":
         t = re.sub(r"^请示", "", t)
     elif genre == "意见":
@@ -300,6 +325,9 @@ class TaskModelingSkill(Skill):
                 spec.recipients = slot([Organ(name=o).model_dump() for o in organs[:3]], "推断", "需求文本")
             elif generic:
                 spec.recipients = slot([Organ(name=f"{generic}（名称待确认）").model_dump()], "待确认", "需求文本")
+        co = joint_issuers(text, issuer_name or "")
+        if co:
+            spec.co_issuers = slot([Organ(name=c).model_dump() for c in co], "推断", "需求文本")
         if hints.get("cc"):
             cc = hints["cc"] if isinstance(hints["cc"], list) else re.split(r"[、，,]", hints["cc"])
             spec.cc = slot([Organ(name=c.strip()).model_dump() for c in cc if c.strip()], "用户提供", "提示")

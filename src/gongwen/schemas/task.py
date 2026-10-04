@@ -89,6 +89,7 @@ class TaskSpec(GWModel):
     issuer: Slot = Field(default_factory=slot, description="发文主体 Organ")
     recipients: Slot = Field(default_factory=slot, description="主送 list[Organ]")
     cc: Slot = Field(default_factory=slot, description="抄送 list[Organ]")
+    co_issuers: Slot = Field(default_factory=slot, description="联合发文机关 list[Organ]（主办机关为 issuer，署名在前）")
     relation: Slot = Field(default_factory=slot, description="行文关系 Direction")
     requested_genre: str | None = Field(default=None, description="用户字面要求的文种/材料类型")
     suggested_genre: Slot = Field(default_factory=slot)

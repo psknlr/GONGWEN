@@ -316,6 +316,12 @@ def _expect_pipeline(eng, st, exp: dict[str, Any], admissions: list) -> tuple[li
             codes = {f.code for f in (g.authority_findings if g else [])}
             for x in v:
                 add(f"authority:{x}", x in codes, "、".join(sorted(codes)))
+        elif k == "procedures":
+            codes = {x.code for x in (g.procedures if g else [])}
+            for x in v:
+                add(f"procedure:{x}", x in codes, "、".join(sorted(codes)))
+        elif k == "signature_organs":
+            add("signature_organs", bool(ir) and ir.signature.organs == v, "、".join(ir.signature.organs) if ir else "无文稿")
         elif k == "alternatives_include":
             alts = set(g.alternatives if g else [])
             for x in v:

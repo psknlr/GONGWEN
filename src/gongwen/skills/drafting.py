@@ -213,7 +213,7 @@ class Drafter:
             self.used_purpose = purpose
         variant = self.outline.variant
         issuing = bool(self.genre.material_type and self.genre.suggested_genre == "通知")
-        if (k in NO_OPENING and not issuing) or variant == "任免":
+        if (k in NO_OPENING and not issuing) or variant in ("任免", "知照"):
             return None  # 正文直接陈述事项（决议、令、公报、议案、简报、要点、办法、任免通知）
         if variant == "转发" and find_incoming(self.bundle, forwarding=True):
             inc = find_incoming(self.bundle, forwarding=True)
@@ -286,13 +286,15 @@ class Drafter:
             core = re.sub(r"^关于|的汇报$", "", self.outline.title)
             text = f"现将{core}汇报如下。"
         elif k in ("工作方案", "讲话稿"):
-            text = (purpose + "，" if purpose else "") + (f"根据{cites}，" if cites else "") + ("结合实际，制定本方案。" if k == "工作方案" else f"现就{subject}有关情况说明如下。")
+            text = (purpose + "，" if purpose else "") + (f"根据{cites}，" if cites else "") + (f"结合实际，制定本{'计划' if re.search(r'计划$', self.outline.title) else '方案'}。" if k == "工作方案" else f"现就{subject}有关情况说明如下。")
         elif k in ("通告", "公告"):
             text = "，".join(p for p in [purpose, f"根据{cites}" if cites else ""] if p)
             text = (text + "，" if text else "") + f"现将有关事项{k}如下。"
         elif k == "通报":
             text = (purpose + "，" if purpose else "") + "现将有关情况通报如下。"
         elif k == "决定":
+            if any(sec.role == "basis" and any(p.refs for p in sec.paragraphs) for sec in self.outline.sections) and not (purpose or cites):
+                return None  # 依据事实段在前、决定事项在后，行文自然衔接，不另加“现作出如下决定”
             text = "，".join(p for p in [purpose, f"根据{cites}" if cites else ""] if p)
             text = (text + "，" if text else "") + "现作出如下决定。"
         elif k == "工作总结":
@@ -335,7 +337,7 @@ class Drafter:
     def body(self) -> list[Block]:
         blocks: list[Block] = []
         n = 0
-        is_letter = self.doc_kind in ("函", "批复", "通报", "决定", "通告", "公告", "决议", "命令（令）", "公报", "议案", "简报", "管理办法") or self.outline.variant in ("任免", "转发")  # 篇幅短的文种一般不设层次标题
+        is_letter = self.doc_kind in ("函", "批复", "通报", "决定", "通告", "公告", "决议", "命令（令）", "公报", "议案", "简报", "管理办法") or self.outline.variant in ("任免", "转发", "知照")  # 篇幅短的文种一般不设层次标题
         for sec in self.outline.sections:
             content: list[Block] = []
             if self.doc_kind == "意见":
@@ -385,7 +387,7 @@ class Drafter:
                     elif sec.role == "answer":
                         # 批复的答复意见只能来自真实决定（会议议定、审批意见），系统不代为决定是否同意
                         sents = [self.sent(self.placeholder("answer", "答复意见（须依据真实审批决定，系统不代为决定是否同意）"), [], "措施")]
-                    elif sec.role in ("requirements",) and (self.doc_kind in ("批复", "通报", "决定", "通告", "意见", "决议", "讲话稿", "工作要点") or self.outline.variant in ("转发", "会议")):
+                    elif sec.role in ("requirements",) and (self.doc_kind in ("批复", "通报", "决定", "通告", "意见", "决议", "讲话稿", "工作要点") or self.outline.variant in ("转发", "会议", "知照")):
                         continue  # 这些文种的执行要求为可选：材料中没有就不写，不留泛泛的待补
                     elif sec.role == "verdict":
                         if re.search(r"表彰|表扬|批评", self.spec.request_text):
@@ -554,7 +556,9 @@ class Drafter:
         elif k in ("决议", "公报", "讲话稿", "简报"):
             signature = Signature(organs=[], seal_mode="none", date="")
         else:
-            signature = Signature(organs=[issuer or "【待确认发文机关】"], seal_mode="no_seal" if fmt in ("jiyao", "plain") else "seal")
+            co = [c.get("name", "") for c in (self.spec.co_issuers.value or []) if isinstance(c, dict)] if self.spec.co_issuers.known else []
+            # 联合行文：主办机关署名在前，各机关署名按发文机关顺序排列（7.3.5.2）
+            signature = Signature(organs=[issuer or "【待确认发文机关】"] + ([c for c in co if c] if fmt not in ("jiyao", "plain") else []), seal_mode="no_seal" if fmt in ("jiyao", "plain") else "seal")
         title_note, salutation = "", ""
         if k == "决议":
             title_note = self.resolution_note()

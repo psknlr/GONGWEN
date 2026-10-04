@@ -35,8 +35,9 @@ MEASURE_ROLES = ("proposal", "plans", "items", "tasks", "next", "goal", "suggest
 RESULT_CUES = re.compile(r"(提升|提高|增长|增加|下降|减少|缩短|达到|实现|覆盖|成效|改善|好转|获评|获得)")
 DECISION_CUES = re.compile(r"(研究决定|决定|议定|同意|予以|给予|命名|授予|通报表彰|通报批评)")
 DIVISION_RE = re.compile(r"(负责|牵头|配合|协助|分工|责任单位)")
+TIME_NODE_RE = re.compile(r"(?:\d{1,2}月(?:底|末|上旬|中旬|下旬|\d{1,2}日)?|年底|年内|季度末)前")
 GOAL_RE = re.compile(r"(目标|拟新建|新建|建成|达到|覆盖率|提升至|提高到|实现)")
-PROBLEM_CUES = ("问题", "不足", "困难", "短板", "制约", "瓶颈", "滞后", "缺口", "不够", "不强", "不高", "隐患", "偏慢", "偏低", "偏少", "较慢", "不到位", "不平衡", "不充分", "薄弱", "欠缺", "老化")
+PROBLEM_CUES = ("问题", "不足", "困难", "短板", "制约", "瓶颈", "滞后", "缺口", "不够", "不强", "不高", "隐患", "偏慢", "偏低", "偏少", "较慢", "不到位", "不平衡", "不充分", "薄弱", "欠缺", "老化", "尚未", "未能", "未按期", "未按时", "未完成", "未达到", "未启动")
 
 GENRE_SECTIONS: dict[str, list[tuple[str, str, str]]] = {
     # (role, heading, function)
@@ -70,6 +71,7 @@ VARIANT_SECTIONS: dict[str, list[tuple[str, str, str]]] = {
     "会议": [("m_time", "会议时间", "事实"), ("m_place", "会议地点", "事实"), ("m_people", "参会人员", "事实"), ("m_agenda", "会议内容", "事实"), ("requirements", "有关要求", "要求")],
     "任免": [("appoint", "", "措施")],
     "转发": [("requirements", "", "要求")],
+    "知照": [("matter", "", "事实"), ("requirements", "", "要求")],
 }
 KV_KEYS = {
     "m_time": ("会议时间", "时间"),
@@ -80,8 +82,12 @@ KV_KEYS = {
 APPOINT_RE = re.compile(r"任命|免去|聘任|聘为|任职|免职|兼任|试用期")
 
 
+# 知照性通知：告知启用印章、机构更名、成立议事协调机构、调整作息等事项，正文直接陈述事项
+KNOW_RE = re.compile(r"关于(启用|停用|启用和停用|更名|变更|撤销|成立|组建|设立|调整[^，。]{0,20}?(组成人员|名称|作息时间|办公地址|联系方式)|[^，。]{0,20}?(放假|迁址|搬迁|办公地址|作息时间))")
+
+
 def notice_variant(request: str, doc_kind: str) -> str:
-    """文种的常见变体：通知的转发（批转）、会议、任免；意见的指导、实施、若干意见。其他返回空。"""
+    """文种的常见变体：通知的转发（批转）、会议、任免、知照；意见的指导、实施、若干意见。其他返回空。"""
     if doc_kind == "意见":
         m = re.search(r"(指导|实施|若干)意见", request)
         return m.group(1) if m else ""
@@ -93,6 +99,8 @@ def notice_variant(request: str, doc_kind: str) -> str:
         return "任免"
     if re.search(r"(召开|举办|举行|参加)[^，。]{0,30}(会议|会|培训班|论坛)", request):
         return "会议"
+    if KNOW_RE.search(request):
+        return "知照"
     return ""
 
 
@@ -144,11 +152,13 @@ class OutlinePlanningSkill(Skill):
         gi = kb.genre(doc_kind)
         subject = str(spec.subject.value or "有关事项")
         issuer = spec.issuer.value.get("name") if spec.issuer.known and isinstance(spec.issuer.value, dict) else ""
+        co = [c.get("name", "") for c in (spec.co_issuers.value or []) if isinstance(c, dict)] if spec.co_issuers.known else []
+        title_issuer = "　".join([issuer] + co) if issuer and co else issuer  # 联合行文：标题中并列各发文机关名称
         variant = notice_variant(spec.request_text, doc_kind)
         incoming = find_incoming(bundle, forwarding=variant == "转发")
         reply = is_reply(spec.request_text, doc_kind) and incoming is not None
         forwarding = variant == "转发" and incoming is not None
-        plan = OutlinePlan(genre=genre.suggested_genre, material_type=genre.material_type, variant=variant, title=self._title(issuer, subject, genre, incoming if (reply or forwarding) else None, variant))
+        plan = OutlinePlan(genre=genre.suggested_genre, material_type=genre.material_type, variant=variant, title=self._title(title_issuer, subject, genre, incoming if (reply or forwarding) else None, variant))
         plan.total_budget_chars = BUDGETS.get(doc_kind, 1500)
         usable = [f for f in ledger.facts if "example" not in f.tags and f.status not in (FactStatus.CONFLICT, FactStatus.UNKNOWN)]
         if reply or forwarding:
@@ -239,8 +249,8 @@ class OutlinePlanningSkill(Skill):
             elif role in ("facts", "work", "overview", "findings", "method", "situation") and doc_kind != "纪要":
                 pick = [f for f in fresh(done_or_ongoing) if f.kind != "plain" and "computed" not in f.tags][:8]
             elif role in ("background", "basis"):
-                # 背景与依据：现状与问题（政策依据在开头段引用）
-                pick = [f for f in fresh(done_or_ongoing + problems) if "computed" not in f.tags][:6]
+                # 背景与依据：现状与问题（政策依据在开头段引用）；决定的依据不含决定事项本身
+                pick = [f for f in fresh(done_or_ongoing + problems) if "computed" not in f.tags and not (doc_kind == "决定" and DECISION_CUES.search(f.statement))][:6]
             elif role == "verdict":
                 # 通报的表彰、批评决定：只取材料中的真实决定；需求要求表彰或批评而材料没有决定时留待补
                 pick = [f for f in fresh(current) if DECISION_CUES.search(f.statement)][:3]
@@ -280,12 +290,15 @@ class OutlinePlanningSkill(Skill):
                 # 执行要求：带时限、报送、联系人的要求性陈述；已完成或推进中的现状陈述不是要求
                 pick = [f for f in fresh(usable) if (DATE_RE.search(f.statement) or "报送" in f.statement or "联系人" in f.statement) and f.progress not in (Progress.COMPLETED, Progress.ONGOING) and "computed" not in f.tags and "table" not in f.tags and not any(t.startswith("kv:") for t in f.tags)]
                 pick = pick[:4]
-                if variant in ("转发", "会议"):
-                    # 转发、会议通知没有“任务”章节：本机关提出的要求（材料中的要求性陈述）都列在这里
+                if variant in ("转发", "会议", "知照"):
+                    # 转发、会议、知照性通知没有“任务”章节：本机关提出的要求（材料中的要求性陈述）都列在这里
                     measure_ids = [m.measure_id for m in plan.measures][:8]
                     pick = [f for f in pick if f.fact_id not in {r.id for m in plan.measures for r in m.basis}]
                     pick += [f for f in usable if "kv:联系人" in f.tags or "kv:联系电话" in f.tags or "kv:报名方式" in f.tags]
-            if role == "matter":
+            if role == "matter" and variant == "知照":
+                # 知照性通知：照材料陈述告知事项（不含措施来源与带时限的要求）
+                pick = [f for f in fresh(usable) if "computed" not in f.tags and not any(t.startswith("kv:") for t in f.tags)][:8]
+            elif role == "matter":
                 # 函、公告：必要背景 + 商洽或公告事项；涉及经费时写明测算合计（明细见附件）
                 pick = (done_or_ongoing + planned)[:6] + [f for f in computed if f.kind == "money"][:1]
             used.update(f.fact_id for f in pick)
@@ -352,6 +365,8 @@ class OutlinePlanningSkill(Skill):
         for m in measures:
             if "division" in out and DIVISION_RE.search(m.text):
                 out["division"].append(m.measure_id)
+            elif "schedule" in out and len(TIME_NODE_RE.findall(m.text)) >= 2:
+                out["schedule"].append(m.measure_id)  # 列出多个时间节点的是进度安排
             elif "goal" in out and GOAL_RE.search(m.text) and re.search(r"\d", m.text):
                 out["goal"].append(m.measure_id)
             elif task_role:
