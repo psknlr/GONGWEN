@@ -30,8 +30,10 @@ def check_attachments(ctx: CheckContext) -> list[ReviewIssue]:
         if name and name[-1] in "。，；：.,;":
             out.append(ctx.issue("GW-FMT-003", IssueType.FORMAT, f"附件说明中附件{seq}名称后不加标点符号", field_name="attachment_notes", original=name, auto_fixable=True, fix_hint={"op": "strip_attachment_punct"}))
     for n in ir.attachment_notes:
-        if n.label and not re.fullmatch(r"\d{1,2}\.", n.label):
-            out.append(ctx.issue("GW-FMT-003", IssueType.FORMAT, f"附件顺序号“{n.label}”应写作“{n.seq}.”（如“附件：1.××××”）", field_name="attachment_notes", original=f"{n.label}{n.name}"))
+        if n.label and len(ir.attachment_notes) == 1:
+            out.append(ctx.issue("GW-FMT-003", IssueType.FORMAT, "只有一个附件时附件说明不编顺序号（如“附件：××××”）", field_name="attachment_notes", original=f"{n.label}{n.name}", auto_fixable=True, fix_hint={"op": "attachment_label"}))
+        elif n.label and not re.fullmatch(r"\d{1,2}\.", n.label):
+            out.append(ctx.issue("GW-FMT-003", IssueType.FORMAT, f"附件顺序号“{n.label}”应写作“{n.seq}.”（如“附件：1.××××”）", field_name="attachment_notes", original=f"{n.label}{n.name}", auto_fixable=True, fix_hint={"op": "attachment_label"}))
         if atts and seq not in atts:
             out.append(ctx.issue("GW-FMT-004", IssueType.ATTACHMENT_MISMATCH, f"附件说明列有附件{seq}“{name}”，但未见对应附件", field_name="attachments", needs_human=True))
         elif atts and atts[seq].strip() != name.strip().rstrip("。"):

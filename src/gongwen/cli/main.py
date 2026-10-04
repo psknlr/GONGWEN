@@ -543,7 +543,7 @@ def _import_warnings(ir) -> None:
 def cmd_check(args) -> int:
     from datetime import date
 
-    from ..agent.render import fmt_check
+    from ..agent.render import fmt_check, visible
     from ..importer import check_external, ir_from_file
     from ..runtime import build_runtime
 
@@ -551,9 +551,29 @@ def cmd_check(args) -> int:
     p = Path(args.file)
     ir = ir_from_file(p.name, p.read_bytes(), genre=args.genre)
     _import_warnings(ir)
-    res = check_external(ir, rt, as_of=date.fromisoformat(args.as_of) if args.as_of else None, region=args.region)
-    d = res.to_dict()
-    emit_json(d) if args.json else print(fmt_check(d))
+    as_of = date.fromisoformat(args.as_of) if args.as_of else None
+    res = check_external(ir, rt, as_of=as_of, region=args.region)
+    if getattr(args, "fix", False):
+        from ..importer import fix_mechanical
+
+        changes = fix_mechanical(ir, res.issues)
+        out = Path(args.out or p.parent)
+        out.mkdir(parents=True, exist_ok=True)
+        fixed = out / f"{p.stem}.修订.md"
+        fixed.write_text(ir.to_markdown(), encoding="utf-8")
+        res = check_external(ir, rt, as_of=as_of, region=args.region)  # 修订后复检：剩余问题须人工处理
+        d = res.to_dict() | {"fixed_file": str(fixed), "changes": changes}
+        if args.json:
+            emit_json(d)
+        else:
+            print(f"已自动修订 {len(changes)} 处机械性问题（修订稿：{fixed}；原稿未改动）：")
+            for c in changes:
+                print(visible(f"  [{c['rule']}] {c['where']}：{c['before']} → {c['after']}"))
+            print("以下为修订后复检结果；文种、结束语、事实与依据等问题须人工处理：")
+            print(fmt_check(d))
+    else:
+        d = res.to_dict()
+        emit_json(d) if args.json else print(fmt_check(d))
     return EXIT_FAIL if any(i.severity.value == "阻断送审" for i in res.issues) else EXIT_OK
 
 
@@ -881,6 +901,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--genre")
     p.add_argument("--as-of", help="依据适用时点 YYYY-MM-DD")
     p.add_argument("--region")
+    p.add_argument("--fix", action="store_true", help="只自动修订标点、数字与日期写法、序数格式、易混字词等机械性问题，输出修订稿与逐处修改清单")
+    p.add_argument("-o", "--out", help="--fix 的输出目录（默认与原稿同目录，文件名加“.修订”，不覆盖原稿）")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_check)
 

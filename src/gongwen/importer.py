@@ -350,4 +350,95 @@ def check_external(ir: DocumentIR, runtime=None, *, as_of: date | None = None, r
     return ExternalCheck(ir=ir, issues=issues, unverifiable=unverifiable)
 
 
-__all__ = ["ExternalCheck", "check_external", "ir_from_file", "ir_from_text", "Severity"]
+_CN_DIGIT = {"〇": "0", "零": "0", "○": "0", "一": "1", "二": "2", "三": "3", "四": "4", "五": "5", "六": "6", "七": "7", "八": "8", "九": "9"}
+
+
+def _cn_date_to_arabic(d: str) -> str | None:
+    """“二〇二六年三月一日”→“2026年3月1日”；“2026年03月01日”→“2026年3月1日”。"""
+    m = re.fullmatch(r"([〇零○一二三四五六七八九\d]{4})年([一二三四五六七八九十\d]{1,3})月([一二三四五六七八九十\d]{1,3})日", d.strip())
+    if not m:
+        return None
+
+    def num(x: str) -> int:
+        if x.isdigit():
+            return int(x)
+        if "十" in x:
+            a, _, b = x.partition("十")
+            return (int(_CN_DIGIT.get(a, "1")) if a else 1) * 10 + (int(_CN_DIGIT[b]) if b else 0)
+        return int("".join(_CN_DIGIT[c] for c in x))
+
+    y = m.group(1) if m.group(1).isdigit() else "".join(_CN_DIGIT[c] for c in m.group(1))
+    return f"{int(y)}年{num(m.group(2))}月{num(m.group(3))}日"
+
+
+# 只做不改变语义的机械性修订：标点、数字与日期写法、序数格式、易混字词；
+# 文种、结束语、事实状态、数字取值等须人工判断，不自动修改
+MECHANICAL_RULES = {"GW-PUNC-001", "GW-PUNC-002", "GW-PUNC-003", "GW-PUNC-004", "GW-PUNC-005", "GW-PUNC-006", "GW-NUM-002", "GW-NUM-004", "GW-NUM-005", "GW-NUM-006", "GW-NUM-007", "GW-STRUCT-001", "GW-STRUCT-002", "GW-STYLE-004", "GW-FMT-002", "GW-FMT-003", "GW-FMT-009", "GW-FMT-005"}
+
+
+def fix_mechanical(ir: DocumentIR, issues: list[ReviewIssue]) -> list[dict[str, str]]:
+    """在 ir 上就地应用机械性修订，返回逐处修改记录（规则、位置、修改前、修改后），供人工复核。"""
+    from .skills.revision import TRANSFORMS
+
+    changes: list[dict[str, str]] = []
+
+    def record(i: ReviewIssue, where: str, before: str, after: str) -> None:
+        if before != after:
+            changes.append({"rule": i.rule.rule_id if i.rule else "", "where": where, "before": before, "after": after, "reason": i.suggestion})
+
+    for i in issues:
+        if not i.rule or i.rule.rule_id not in MECHANICAL_RULES:
+            continue
+        hint = i.fix_hint or {}
+        loc = i.location
+        if loc.sentence_id and i.auto_fixable:
+            found = ir.find_sentence(loc.sentence_id)
+            if not found:
+                continue
+            _, sent = found
+            new = sent.text
+            if hint.get("op") in TRANSFORMS:
+                new = TRANSFORMS[hint["op"]](new)
+            elif "replace" in hint and "with" in hint:
+                new = new.replace(hint["replace"], hint["with"])
+            elif "regex" in hint:
+                new = re.sub(hint["regex"], hint["with"], new)
+            record(i, loc.label or loc.sentence_id, sent.text, new)
+            sent.text = new
+        elif loc.block_id and "set_label" in hint:
+            b = ir.find_block(loc.block_id)
+            if b is not None:
+                record(i, loc.label or loc.block_id, f"{b.label}{b.heading}", f"{hint['set_label']}{b.heading}")
+                b.label = hint["set_label"]
+        elif loc.field == "title" and "strip_end" in hint:
+            new = ir.title.rstrip("。，；：！？.,;:")
+            record(i, "标题", ir.title, new)
+            ir.title = new
+        elif loc.field == "attachment_notes":
+            for n in ir.attachment_notes:
+                name = n.name.rstrip("。，；：.,;")
+                before = f"{n.label}{n.name}"
+                n.name = name
+                if n.label:
+                    n.label = "" if len(ir.attachment_notes) == 1 else f"{n.seq}."
+                record(i, "附件说明", before, f"{n.label}{n.name}")
+        elif loc.field == "recipients" and hint.get("op") == "strip_recipient_punct":
+            new = [r.rstrip("：:，。") for r in ir.recipients]
+            record(i, "主送机关", "、".join(ir.recipients), "、".join(new))
+            ir.recipients = new
+        elif loc.field == "signature.date":
+            new = _cn_date_to_arabic(ir.signature.date)
+            if new:
+                record(i, "成文日期", ir.signature.date, new)
+                ir.signature.date = new
+    # 同一处被多条问题指向时只保留一次记录
+    seen, out = set(), []
+    for c in changes:
+        key = (c["where"], c["before"], c["after"])
+        if key not in seen:
+            seen.add(key)
+            out.append(c)
+    return out
+
+
+__all__ = ["ExternalCheck", "check_external", "fix_mechanical", "ir_from_file", "ir_from_text", "Severity"]

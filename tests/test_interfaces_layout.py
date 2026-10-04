@@ -318,3 +318,26 @@ def test_pdf_draft_is_reflowed_into_paragraphs(tmp_path):
     assert any(t.startswith("2026年全市新建") and t.endswith("完成建设和验收工作。") for t in texts)
     assert not any("—" in t or "【" in t for t in texts)
     assert ir2.signature.date == "2026年3月1日"
+
+
+def test_check_fix_applies_only_mechanical_changes(tmp_path, capsys):
+    """check --fix 只改标点、数字与日期写法、附件序号等机械性问题，输出修订稿与逐处清单，原稿不动；
+    文种、结束语、称谓等须人工处理的问题保留在复检结果中。"""
+    src = tmp_path / "稿.txt"
+    text = (
+        "示例市卫生健康委员会关于开展检查的通知。\n各区卫生健康局：\n"
+        "检查时间为2026年4月1号至4月30号,共检查１２３家机构。\n请贵局认真组织实施。\n"
+        "附件：1、检查表。\n示例市卫生健康委员会\n二〇二六年三月一日\n"
+    )
+    src.write_text(text, encoding="utf-8")
+    rc = cli(["-C", str(tmp_path), "check", str(src), "--fix", "-o", str(tmp_path / "out"), "--json"])
+    d = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert src.read_text(encoding="utf-8") == text
+    fixed = (tmp_path / "out" / "稿.修订.md").read_text(encoding="utf-8")
+    assert "2026年4月1日至4月30日，共检查123家机构。" in fixed
+    assert "2026年3月1日" in fixed and "附件：检查表" in fixed and "关于开展检查的通知\n" in fixed  # 只有一个附件不编序号
+    assert "贵局" in fixed  # 称谓问题须人工判断，不自动改
+    rules_left = {i["rule"].split()[0] for i in d["issues"] if i.get("rule")}
+    assert "GW-GENRE-006" in rules_left and not rules_left & {"GW-NUM-006", "GW-NUM-007", "GW-PUNC-001", "GW-FMT-002", "GW-FMT-009"}
+    assert {c["rule"] for c in d["changes"]} >= {"GW-NUM-006", "GW-NUM-007", "GW-PUNC-001", "GW-FMT-002", "GW-FMT-003", "GW-FMT-009"}
+    assert rc in (0, 1)

@@ -199,6 +199,10 @@ class DocumentIR(GWModel):
         out += [*self.signature.organs, self.signature.date, ""]
         if self.note:
             out += [f"（{self.note}）", ""]
+        if self.imprint.main_moved:
+            out += [f"主送：{'，'.join(self.imprint.main_moved)}。", ""]
+        if self.imprint.cc:
+            out += [f"抄送：{'，'.join(self.imprint.cc)}。", ""]
         for att in self.attachments:
             out += ["---", "", f"附件{att.seq}" if len(self.attachments) > 1 else "附件", "", f"## {att.title}", ""]
             for b in att.blocks:
