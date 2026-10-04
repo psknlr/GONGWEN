@@ -155,18 +155,8 @@ class Engine:
                 return task_id, matter_id
 
     def _purge_material(self, matter_id: str, material_id: str) -> None:
-        """删除不予准入的材料。原始文件按内容哈希存放：同一事项其他材料引用同一文件时只删除本材料的登记。
-
-        MaterialStore.purge 会连同原始文件一并删除，此处删除后为仍在引用的材料按原样恢复原始文件与登记。
-        """
-        store = self.rt.materials
-        mat = store.get(matter_id, material_id)
-        shared = next((m for m in store.list(matter_id) if m.sha256 == mat.sha256 and m.material_id != material_id), None)
-        data = store.read_bytes(shared) if shared is not None else None
-        store.purge(matter_id, material_id)
-        if shared is not None:
-            store.put(matter_id, shared.material_id, shared.filename, data, shared.uploaded_by, shared.declared_clearance, shared.role, shared.description)
-            store.save_meta(shared)
+        """删除不予准入的材料；同一事项其他材料引用同一原始文件时由存储层只删除本材料的登记。"""
+        self.rt.materials.purge(matter_id, material_id)
 
     # ================================================================ 任务与材料
     def create_task(self, request: str, *, by: Principal, matter_id: str | None = None, hints: dict | None = None, options: dict | None = None) -> TaskState:

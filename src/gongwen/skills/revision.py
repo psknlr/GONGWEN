@@ -214,6 +214,8 @@ class RevisionSkill(Skill):
             if not found:
                 return False
             _, s = found
+            if p.before and s.text != p.before:
+                return False  # 句子已被他人修改：过期补丁不覆盖现有文本
             s.text = p.after
             s.origin = "patch" if p.author != "human" else "human"
             return True
@@ -230,6 +232,8 @@ class RevisionSkill(Skill):
             if not found:
                 return False
             b, s = found
+            if p.before and s.text != p.before:
+                return False
             b.sentences.remove(s)
             return True
         if p.op == "set_label":

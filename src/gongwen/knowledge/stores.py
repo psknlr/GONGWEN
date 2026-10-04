@@ -138,10 +138,14 @@ class MaterialStore:
         return data
 
     def purge(self, matter_id: str, material_id: str) -> None:
-        """删除不予准入的材料（禁止进入当前环境）。"""
+        """删除不予准入的材料（禁止进入当前环境）。
+
+        原始文件按内容哈希存放：同一事项中仍有其他材料登记引用同一文件时，只删除本材料的登记。
+        """
         mat = self.get(matter_id, material_id)
         blob = self.blob_path(mat)
-        if blob.exists():
+        shared = any(m.sha256 == mat.sha256 and m.material_id != material_id for m in self.list(matter_id))
+        if blob.exists() and not shared:
             blob.chmod(0o644)
             blob.unlink()
         (self._mdir(matter_id) / f"{material_id}.json").unlink(missing_ok=True)
