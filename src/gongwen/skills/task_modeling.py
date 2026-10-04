@@ -166,6 +166,9 @@ def extract_subject(text: str, genre: str | None) -> str:
     # “给××发函”“向××行文”只说明收文对象，不是事由
     clauses = [c for c in clauses if not _ADDRESSING.fullmatch(c)] or clauses
     if len(clauses) > 1:
+        # “给省教育厅的函，商请……”：含文种词的小句只说明收文对象时，事由在其他小句
+        addressing_only = re.compile(r"^(请|帮我)?(起草|写|拟写|草拟)?(一份|一个|一篇)?(给|向|致|对)" + _ORGAN_RE.pattern + r"的?(" + "|".join(kb.STATUTORY_GENRES) + r"|复函)$")
+        clauses = [c for c in clauses if not addressing_only.match(c)] or clauses
         t = next((c for c in clauses if genre and (c.endswith(genre) or f"的{genre}" in c)), None) or next((c for c in clauses if _SUBJECT_VERBS.search(c)), clauses[0])
     else:
         t = text.strip()

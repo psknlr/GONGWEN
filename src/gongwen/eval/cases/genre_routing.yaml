@@ -531,3 +531,62 @@
     section_contains:
       主要工作: [已建成基层医疗示范点8个]
       问题与不足: [设备老化]
+
+- id: GR-28
+  task_group: adversarial
+  kind: pipeline
+  title: 高校内设机构（教务处）以自身名义向省教育厅发函 → 超出权限（即使标注为“高校”）
+  request: 起草一份给省教育厅的函，商请支持开展教学改革试点
+  hints: {recipients: 示例省教育厅, issuer_type: 高校}
+  env: {unit_profile: university, unit_name: 示例大学教务处}
+  materials:
+    - name: 说明.md
+      text: |
+        我校拟于2026年开展本科教学改革试点，涉及专业5个。
+  accept: [task_confirm]
+  expect:
+    stage: 超出权限
+    authority_codes: [INTERNAL_UNIT_EXTERNAL]
+
+- id: GR-29
+  task_group: single
+  kind: pipeline
+  title: 科研院所向主管部门报告：执行偏慢归入“存在的问题”，自称“我所”，事由去掉收文对象
+  request: 起草一份向主管部门报告2025年科研项目执行情况的报告
+  hints: {recipients: 示例市科学技术局, issuer_type: 科研机构}
+  env: {unit_profile: research_institute, unit_name: 示例研究所}
+  materials:
+    - name: 情况.md
+      text: |
+        2025年我所承担科研项目23项，已完成结题验收15项。
+
+        部分项目经费执行进度偏慢，执行率为62%。
+
+        2026年拟加强项目过程管理。
+  accept: [task_confirm, outline_confirm]
+  expect:
+    stage: 人工送审
+    genre: 报告
+    draft_contains: [示例研究所关于2025年科研项目执行情况的报告]
+    section_contains:
+      存在的问题: [执行率为62%]
+      下一步工作安排: [加强项目过程管理]
+
+- id: GR-30
+  task_group: single
+  kind: pipeline
+  title: 高校通知：任务中已写明时限与报送要求时不再另留“工作要求”待补
+  request: 起草一份关于做好2026年暑期实验室安全检查工作的通知
+  hints: {recipients: 各学院、各部门, issuer_type: 高校}
+  env: {unit_profile: university, unit_name: 示例大学}
+  materials:
+    - name: 安排.md
+      text: |
+        各学院要在2026年7月10日前完成实验室安全自查，并将自查报告报送实验室与设备管理处。
+
+        实验室与设备管理处负责组织抽查。
+  accept: [task_confirm, outline_confirm]
+  expect:
+    stage: 人工送审
+    draft_contains: [示例大学关于做好2026年暑期实验室安全检查工作的通知, 2026年7月10日前完成实验室安全自查]
+    draft_not_contains: [【待补：执行要求]

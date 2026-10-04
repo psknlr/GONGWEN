@@ -276,6 +276,8 @@ class Drafter:
                         sents = [self.sent(self.placeholder("decisions", "决定事项（须依据真实研究决定，系统不代为决定）"), [], "措施")]
                     elif sec.role in ("basis", "background") and self.doc_kind in ("决定", "通告", "意见"):
                         continue  # 依据与背景已在开头段说明；材料中没有更多情况时不留空节
+                    elif sec.role in ("requirements",) and any(m.deadline or re.search(r"报送|联系人|反馈", m.text) for m in self.outline.measures):
+                        continue  # 任务中已写明时限与报送要求：不再另留“工作要求”待补
                     elif sec.role in ("requirements",):
                         sents = [self.sent(self.placeholder("requirements", "执行要求（如完成时限、报送方式、联系人）") , [], "要求")]
                     elif sec.role in required and sec.role in ("division", "schedule", "scope", "goal"):

@@ -39,6 +39,9 @@ def _organ_type(v) -> str:
 
 
 def _infer_type(name: str, given: str) -> str:
+    # 内设机构以名称为准：“示例大学教务处”即使被标为“高校”，也是内设机构（条例第十七条）
+    if "内设" in (given or "") or (re.search(r"(处|科|室)$", name) and not name.endswith(("办公室", "办公厅"))):
+        return "部门内设机构"
     if given and given != "未知":
         return given
     if name.endswith("人民政府"):

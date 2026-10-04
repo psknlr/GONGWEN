@@ -36,7 +36,7 @@ RESULT_CUES = re.compile(r"(提升|提高|增长|增加|下降|减少|缩短|达
 DECISION_CUES = re.compile(r"(研究决定|决定|议定|同意|予以|给予|命名|授予|通报表彰|通报批评)")
 DIVISION_RE = re.compile(r"(负责|牵头|配合|协助|分工|责任单位)")
 GOAL_RE = re.compile(r"(目标|拟新建|新建|建成|达到|覆盖率|提升至|提高到|实现)")
-PROBLEM_CUES = ("问题", "不足", "困难", "短板", "制约", "瓶颈", "滞后", "缺口", "不够", "不强", "不高", "隐患")
+PROBLEM_CUES = ("问题", "不足", "困难", "短板", "制约", "瓶颈", "滞后", "缺口", "不够", "不强", "不高", "隐患", "偏慢", "偏低", "偏少", "较慢", "不到位", "不平衡", "不充分", "薄弱", "欠缺", "老化")
 
 GENRE_SECTIONS: dict[str, list[tuple[str, str, str]]] = {
     # (role, heading, function)
