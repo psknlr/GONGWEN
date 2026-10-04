@@ -295,3 +295,26 @@ def test_signature_is_not_pushed_alone_to_next_page(tmp_path):
     sig = next(c for c in rep.checks if c.rule_id == "LAY-SIGNATURE")
     assert sig.status == "pass", (sig.actual, rep.render.notes)
     assert any("7.3.5.5" in n for n in rep.render.notes)  # 首次排版署名被挤到下一面，已调整空行行距
+
+
+@pytest.mark.skipif(not shutil.which("soffice"), reason="需要 LibreOffice 生成 PDF")
+def test_pdf_draft_is_reflowed_into_paragraphs(tmp_path):
+    """PDF 文稿：去掉页码与页眉标注、合并跨行的段落与分行的标题、去掉汉字与数字间的空格。"""
+    import subprocess
+
+    txt = (
+        "示例市卫生健康委员会关于做好2026年基层医疗示范点建设工作的通知\n各区卫生健康局：\n"
+        "为提升基层医疗卫生服务能力，根据市政府工作部署，现就做好2026年基层医疗示范点建设工作有关事项通知如下。\n"
+        "一、工作目标\n2026年全市新建基层医疗示范点12个，各区卫生健康局要在2026年6月30日前完成选址，并于2026年12月31日前完成建设和验收工作。\n"
+        "示例市卫生健康委员会\n2026年3月1日\n"
+    )
+    ir = ir_from_text(txt)
+    path, _ = compile_docx(ir, tmp_path / "a.docx", LayoutProfile.load())
+    subprocess.run(["soffice", "--headless", "--convert-to", "pdf", "--outdir", str(tmp_path), str(path)], capture_output=True, timeout=180)
+    ir2 = ir_from_file("a.pdf", (tmp_path / "a.pdf").read_bytes())
+    assert ir2.title == "示例市卫生健康委员会关于做好2026年基层医疗示范点建设工作的通知"
+    assert ir2.recipients == ["各区卫生健康局"] and ir2.genre == "通知"
+    texts = [b.text() for b in ir2.blocks]
+    assert any(t.startswith("2026年全市新建") and t.endswith("完成建设和验收工作。") for t in texts)
+    assert not any("—" in t or "【" in t for t in texts)
+    assert ir2.signature.date == "2026年3月1日"

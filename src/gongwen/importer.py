@@ -151,10 +151,14 @@ def ir_from_text(text: str, *, doc_id: str = "EXT", genre: str | None = None, di
     header.signers = signers
     title = lines[i] if i < len(lines) else ""
     i += 1
-    # 标题分行：前一行不以文种结尾、后一行以文种结尾且两行都无句末标点
-    if i < len(lines) and not _genre_of_title(title) and _genre_of_title(lines[i]) and len(lines[i]) <= 40 and title[-1:] not in PUNCT_END and lines[i][-1:] not in PUNCT_END:
-        title += lines[i]
-        i += 1
+    # 标题分行（PDF、手工断行常见）：其后至多两行都无句末标点、最后一行以文种结尾时合并为标题
+    if not _genre_of_title(title) and title[-1:] not in PUNCT_END:
+        for k in (1, 2):
+            tail = lines[i : i + k]
+            if len(tail) == k and all(len(x) <= 40 and x[-1:] not in PUNCT_END and not x.endswith(("：", ":")) for x in tail) and _genre_of_title(tail[-1]):
+                title += "".join(tail)
+                i += k
+                break
     recipients: list[str] = []
     if i < len(lines) and lines[i][-1:] in "：:" and len(lines[i]) <= 160 and not any(p.match(lines[i]) for _, p in LEVELS):
         recipients = [r for r in re.split(r"[、，,]", lines[i][:-1]) if r.strip()]
