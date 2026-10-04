@@ -35,6 +35,7 @@ def check_title(ctx: CheckContext) -> list[ReviewIssue]:
     out: list[ReviewIssue] = []
     ir = ctx.ir
     title = ir.title.strip()
+    bare = title.rstrip("。，；：！？.,;:!? ")  # 末尾标点另报 GW-FMT-009，不影响文种判断
     if not title:
         return [ctx.issue("GW-GENRE-008", IssueType.REQUIRED_MISSING, "缺少标题", field_name="title")]
     if title[-1] in "。，；：！？.,;:":
@@ -44,10 +45,10 @@ def check_title(ctx: CheckContext) -> list[ReviewIssue]:
     g = kb.genre(ir.genre)
     if g and g.statutory:
         genre_tail = ir.genre.replace("（令）", "")
-        if not (title.endswith(ir.genre) or title.endswith(genre_tail) or (ir.genre == "命令（令）" and title.endswith("令"))):
+        if not (bare.endswith(ir.genre) or bare.endswith(genre_tail) or (ir.genre == "命令（令）" and bare.endswith("令"))):
             out.append(ctx.issue("GW-GENRE-008", IssueType.GENRE_MISMATCH, f"标题应以文种“{ir.genre}”结尾（标题由发文机关名称、事由和文种组成）", field_name="title", original=title))
         for other in kb.STATUTORY_GENRES:
-            if other != ir.genre and title.endswith(other) and other not in ir.genre:
+            if other != ir.genre and bare.endswith(other) and other not in ir.genre:
                 out.append(ctx.issue("GW-GENRE-001", IssueType.GENRE_MISMATCH, f"标题文种“{other}”与判定文种“{ir.genre}”不一致", field_name="title", original=title, needs_human=True))
                 break
         if ctx.task and ctx.task.issuer.known:
@@ -213,6 +214,18 @@ def check_single_matter(ctx: CheckContext) -> list[ReviewIssue]:
     return []
 
 
+_LEVELS = ("省", "市", "区", "县", "乡", "镇", "街道")
+
+
+def _looks_lower(organ: str, issuer: str) -> bool:
+    """“各区卫生健康局”“各科室”或行政层级低于发文机关的机关，视为下级（只作提示依据，须人工确认）。"""
+    if organ.startswith("各"):
+        return True
+    level = lambda name: max((i for i, w in enumerate(_LEVELS) if re.search(rf"[一-鿿]{{1,8}}{w}(?!委|政府办)", name)), default=-1)  # noqa: E731
+    li, lo = level(issuer), level(organ)
+    return li >= 0 and lo > li
+
+
 def check_routing(ctx: CheckContext) -> list[ReviewIssue]:
     out: list[ReviewIssue] = []
     ir = ctx.ir
@@ -229,6 +242,9 @@ def check_routing(ctx: CheckContext) -> list[ReviewIssue]:
             )
         if not ir.header.signers:
             out.append(ctx.issue("GW-ROUTE-012", IssueType.PLACEHOLDER, "上行文应当标注签发人姓名；签发人须由真实签发流程确定，系统不代填", field_name="header.signers"))
+        lower = [c for c in ir.imprint.cc if _looks_lower(c, ir.signature.organs[0] if ir.signature.organs else "")]
+        if lower:
+            out.append(ctx.issue("GW-ROUTE-002", IssueType.ROUTING, f"上行文不抄送下级机关（抄送中有：{'、'.join(lower)}）", field_name="imprint.cc", original="、".join(ir.imprint.cc), needs_human=True))
     if ctx.genre:
         for f in ctx.genre.authority_findings:
             rid = f.basis[0].rule_id if f.basis and f.basis[0].rule_id in _rule_ids() else "GW-ROUTE-005"

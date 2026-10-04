@@ -91,11 +91,14 @@ def check_burden(ctx: CheckContext) -> list[ReviewIssue]:
     out: list[ReviewIssue] = []
     if not ctx.features.burden_check:
         return out
+    if ctx.direction == "上行文":
+        return out  # 减负规定针对上级向基层提出的报送、考核、留痕要求；上行文不适用
     lex = kb.lexicon()
     terms = [t for group in lex["burden_terms"].values() for t in group]
     allowed = _allowed_sources(ctx)
     for b, s in ctx.ir.iter_sentences():
-        hits = [t for t in terms if t in s.text]
+        text = re.sub(r"以上报告|以上报", "", s.text)  # “以上报告”中的“上报”不是报送要求
+        hits = [t for t in terms if t in text]
         if not hits:
             continue
         freq = [f for f in lex["frequency"] if f in s.text]

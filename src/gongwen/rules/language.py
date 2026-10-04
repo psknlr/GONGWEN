@@ -21,7 +21,8 @@ _YEAR_RANGE_RE = re.compile(r"(\d{4})\s*[-－~～至到]\s*(\d{4})\s*年")
 _NUM_RANGE_RE = re.compile(r"(?<![\d年月])(\d+(?:\.\d+)?)\s*[-－~]\s*(\d+(?:\.\d+)?)\s*(天|个|人|次|项|家|万元|元|小时|分钟|岁|米|公里|%|％)")
 _PCT_RANGE_RE = re.compile(r"(?<![\d.])(\d+(?:\.\d+)?)\s*[～~—\-至到]\s*(\d+(?:\.\d+)?)\s*[%％]")
 _WAN_RANGE_RE = re.compile(r"(?<![\d.])(\d+(?:\.\d+)?)\s*[～~—\-至到]\s*(\d+(?:\.\d+)?)\s*(万|亿)(元)?")
-_YEAR2_RE = re.compile(r"(?<![\d〔第])(\d{2})年(\d{1,2})月")
+# 简写年份：“26年3月”“25年底”“截至25年”；“工作12年”等时长不在此列
+_YEAR2_RE = re.compile(r"(?<![\d〔第])(\d{2})年(?=\d{1,2}月|底|末|初|度|上半年|下半年)|(?<=截至)(\d{2})年|(?<=截止)(\d{2})年")
 _LEAD_DOT_RE = re.compile(rf"(?<=[\s{CJK}，：])\.(\d+)")
 _PAD_DATE_RE = re.compile(r"\d{4}年(0\d)月|月(0\d)日")
 _MIXED_DATE_RE = re.compile(r"[〇零一二三四五六七八九]{4}年\d{1,2}月|\d{4}年[一二三四五六七八九十]{1,2}月")
@@ -90,12 +91,24 @@ def check_punctuation(ctx: CheckContext) -> list[ReviewIssue]:
     return out
 
 
+_FULLWIDTH_DIGIT = re.compile(r"[０-９]+")
+_DATE_HAO = re.compile(r"\d{1,2}月\d{1,2}号")
+
+
 def check_numbers(ctx: CheckContext) -> list[ReviewIssue]:
     out: list[ReviewIssue] = []
     for b, s, t in _texts(ctx):
+        m = _FULLWIDTH_DIGIT.search(t)
+        if m:
+            half = m.group(0).translate({ord("０") + i: ord("0") + i for i in range(10)})
+            out.append(ctx.issue("GW-NUM-006", IssueType.NUMBER_USAGE, f"全角数字“{m.group(0)}”应改为半角“{half}”", block=b, sentence=s, auto_fixable=True, fix_hint={"op": "halfwidth_digits"}))
+        m = _DATE_HAO.search(t)
+        if m:
+            out.append(ctx.issue("GW-NUM-007", IssueType.NUMBER_USAGE, f"“{m.group(0)}”应写作“{m.group(0)[:-1]}日”", block=b, sentence=s, auto_fixable=True, fix_hint={"op": "date_ri"}))
         m = _YEAR2_RE.search(t)
         if m:
-            out.append(ctx.issue("GW-NUM-001", IssueType.NUMBER_USAGE, f"年份“{m.group(1)}年”不应简写，应写全称（如“20{m.group(1)}年”）", block=b, sentence=s, needs_human=True))
+            yy = next(g for g in m.groups() if g)
+            out.append(ctx.issue("GW-NUM-001", IssueType.NUMBER_USAGE, f"年份“{yy}年”不应简写，应写全称（如“20{yy}年”）", block=b, sentence=s, needs_human=True))
         m = _PCT_RANGE_RE.search(t)
         if m and not re.search(r"\d\s*[%％]\s*[～~—\-至到]", m.group(0)):
             out.append(ctx.issue("GW-NUM-002", IssueType.NUMBER_USAGE, f"百分数范围的百分号不能省略（应为“{m.group(1)}%～{m.group(2)}%”）", block=b, sentence=s, auto_fixable=True, fix_hint={"op": "pct_range"}))

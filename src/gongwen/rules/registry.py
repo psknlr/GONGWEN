@@ -119,6 +119,8 @@ RULES: dict[str, RuleMeta] = {
         _r("GW-NUM-003", "“万”“亿”不跨数省略", L.STANDARD, "GB/T 15835—2011", S.MINOR, "数字", GBT15835),
         _r("GW-NUM-004", "纯小数写出定位“0”", L.STANDARD, "GB/T 15835—2011", S.MINOR, "数字", GBT15835),
         _r("GW-NUM-005", "同一体例内日期数字形式统一", L.STANDARD, "GB/T 15835—2011", S.MINOR, "数字", GBT15835),
+        _r("GW-NUM-006", "阿拉伯数字使用半角形式", L.STANDARD, "GB/T 15835—2011 4.1", S.MINOR, "数字", GBT15835),
+        _r("GW-NUM-007", "日期写作“×月×日”，不用“号”", L.PRACTICE, "实务惯例（公文日期用“日”）", S.MINOR, "数字"),
         _r("GW-STRUCT-001", "结构层次序数依次用“一、”“（一）”“1.”“（1）”", L.NATIONAL_STANDARD, f"{_G} 7.3.3", S.MINOR, "结构", GBT9704, "7.3.3"),
         _r("GW-STRUCT-002", "同级序数连续编号", L.PRACTICE, "实务惯例", S.MINOR, "结构"),
         # ---- 格式

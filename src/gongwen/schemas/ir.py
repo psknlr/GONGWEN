@@ -71,6 +71,7 @@ class Signature(GWModel):
 class AttachmentNote(GWModel):
     seq: int
     name: str
+    label: str = Field(default="", description="外部文稿中附件顺序号的原样写法（如“1、”），用于格式检查")
 
 
 class Attachment(GWModel):

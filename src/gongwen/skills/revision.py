@@ -48,6 +48,8 @@ TRANSFORMS: dict[str, Callable[[str], str]] = {
     "wan_range": lambda t: re.sub(r"(?<![\d.])(\d+(?:\.\d+)?)\s*[～~—\-至到]\s*(\d+(?:\.\d+)?)\s*(万|亿)(元)?", lambda m: f"{m.group(1)}{m.group(3)}{m.group(4) or ''}～{m.group(2)}{m.group(3)}{m.group(4) or ''}", t),
     "lead_zero": lambda t: re.sub(rf"(?<=[\s{CJK}，：])\.(\d+)", r"0.\1", t),
     "unpad_date": lambda t: re.sub(r"(\d{4}年)0(\d)月", r"\1\2月", re.sub(r"月0(\d)日", r"月\1日", t)),
+    "halfwidth_digits": lambda t: t.translate({ord("０") + i: ord("0") + i for i in range(10)}),
+    "date_ri": lambda t: re.sub(r"(\d{1,2}月\d{1,2})号", r"\1日", t),
     "label_punct": lambda t: re.sub(r"^（([一二三四五六七八九十]+)）[、，.．]", r"（\1）", re.sub(r"^(\d+)[、，．]", r"\1.", re.sub(r"^([一二三四五六七八九十]+)[.．，]", r"\1、", re.sub(r"^\(([一二三四五六七八九十\d]+)\)", r"（\1）", t)))),
 }
 

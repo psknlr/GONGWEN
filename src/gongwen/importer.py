@@ -50,6 +50,7 @@ def _clean(line: str) -> str:
 
 
 def _genre_of_title(title: str) -> str | None:
+    title = title.rstrip("。，；：！？.,;:!? ")  # 标题末尾误加的标点另由格式检查指出，不影响文种识别
     names = sorted(set(kb.genres()) | set((kb.seed("genres.yaml").get("aliases") or {}).keys()), key=len, reverse=True)
     for n in names:
         if title.endswith(n):
@@ -209,7 +210,8 @@ def ir_from_text(text: str, *, doc_id: str = "EXT", genre: str | None = None, di
         rest = rest[:k]
         for n, it in enumerate(x for x in items if x):
             m = ATT_ITEM.match(it)
-            notes.append(AttachmentNote(seq=int(m.group(1)) if m else n + 1, name=(m.group(2) if m else it).strip()))
+            label = it[: m.start(2)].strip() if m else ""
+            notes.append(AttachmentNote(seq=int(m.group(1)) if m else n + 1, name=(m.group(2) if m else it).strip(), label=label))
 
     # ---- 正文
     blocks: list[Block] = []
