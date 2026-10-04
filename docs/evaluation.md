@@ -25,7 +25,7 @@ gongwen eval --cases my_cases/ --out report/   # 自定义用例目录与输出�
 
 | 类型 | 做什么 | 期望示例 |
 |---|---|---|
-| `pipeline` | 走完整流程，模拟人在各审核节点的处理（`accept` 自动接受、`human` 脚本） | `stage`、`genre`、`draft_contains`、`draft_not_contains`、`section_contains`、`numbers_sourced`、`authority_codes`、`procedures`、`signature_organs`、`conflicts` |
+| `pipeline` | 走完整流程，模拟人在各审核节点的处理（`accept` 自动接受、`human` 脚本） | `stage`、`genre`、`draft_contains`、`draft_not_contains`、`section_contains`、`numbers_sourced`、`authority_codes`、`procedures`、`signature_organs`、`max_occurrences`、`conflicts` |
 | `check` | 对外部文稿做规范检查 | `rules_present`（埋入的问题须检出）、`max_issues`（干净对照不得误报） |
 | `admission` | 材料准入 | `admission`（逐份判定）、`finding_codes` |
 | `revision` | 形成文稿后人工改写或变更关键事实 | `rules_present`、`errors_contain`、`attachment_table_contains` |

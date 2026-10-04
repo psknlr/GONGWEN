@@ -177,6 +177,8 @@ class Drafter:
             return self.sent(f"【待确认：{norm_sentence(m.text).rstrip('。')}】", [EvidenceRef(kind="measure", id=m.measure_id)], "措施", m.measure_id)
         # 措施原文已带拟议或要求语义：保持原样，不额外改写义务强度或事实状态
         text = norm_sentence(m.text)
+        if self.used_purpose and text.startswith(self.used_purpose + "，") and len(text) > len(self.used_purpose) + 6:
+            text = text[len(self.used_purpose) + 1 :]  # 开头已写目的状语，措施句不再重复（原句的连续片段）
         return self.sent(text, list(m.basis) + [EvidenceRef(kind="measure", id=m.measure_id)], "措施", m.measure_id)
 
     # ---------------------------------------------------------------- 文稿各部分
@@ -204,6 +206,14 @@ class Drafter:
         return ""
 
     def opening(self) -> Block | None:
+        block = self._opening()
+        # 只有开头段确实写入了目的状语，正文事实句才省去重复的目的状语；没有开头段（议案、令等）时保留原句
+        text = "".join(x.text for x in block.sentences) if block else ""
+        if not (self.used_purpose and self.used_purpose in text):
+            self.used_purpose = ""
+        return block
+
+    def _opening(self) -> Block | None:
         subject = str(self.spec.subject.value or "有关事项")
         purpose = self.purpose_clause()
         cites, crefs = self.citations()
@@ -526,8 +536,8 @@ class Drafter:
             recips = [self.placeholder("recipients", "主送机关")]
         if k in ("决议", "命令（令）", "公报", "讲话稿", "简报"):
             recips = []  # 公布性文种与讲话、简报不设主送机关
+        opening = self.opening()  # 先定开头：开头已用的目的状语，正文事实句不再重复
         body = self.body()
-        opening = self.opening()
         # 印发类通知：通知正文只说明印发事项，所印发的方案作为附件（条例第八条：事务材料由法定文种印发）
         blocks = ([opening] if opening else []) + ([] if issuing else body)
         if k == "请示" and not any(s.function == "请求" for b in blocks for s in b.sentences):
@@ -602,6 +612,8 @@ class Drafter:
         )
         if g.direction == "上行文" and k in ("请示", "报告", "意见", "议案"):
             ir.placeholders.append(Placeholder(field="header.signers", reason="上行文签发人由真实签发流程确定"))
+        if k == "简报" and issuer:
+            ir.meta["brief_issuer"] = issuer  # 简报报头的编印单位；编印日期由印发时确定
         return ir
 
 

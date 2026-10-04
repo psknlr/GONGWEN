@@ -99,6 +99,7 @@
     genre: 函
     title_suffix: 建设经费的函
     draft_not_contains: [给示例市财政局发函, 请遵照执行]
+    max_occurrences: {为提升基层医疗卫生服务能力: 1}  # 开头已写目的状语，正文不重复
 
 - id: GR-06
   task_group: temporal
@@ -711,7 +712,7 @@
   expect:
     stage: 人工送审
     genre: 议案
-    draft_contains: [示例市人民代表大会常务委员会, 已经2026年4月10日市人民政府第25次常务会议讨论通过, 现提请审议, 市长　【签名章】]
+    draft_contains: [示例市人民代表大会常务委员会, 为规范基层医疗卫生服务, 已经2026年4月10日市人民政府第25次常务会议讨论通过, 现提请审议, 市长　【签名章】]
     rules_absent_open: [GW-BASIS-001]
 
 - id: GR-37

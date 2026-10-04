@@ -140,6 +140,16 @@ def split_title(title: str, max_chars: int = 20, issuer: str = "") -> list[str]:
     行宽按渲染宽度估计（render_width_chars），保证每一行都能排下，不会被渲染器再折出单字。"""
     if render_width_chars(title) <= max_chars:
         return [title]
+    k = title.find("关于")
+    if k > 0 and "　" in title[:k]:
+        # 联合行文：各发文机关名称（以全角空格分隔）单独成行，“关于”另起一行，不在机关名称中间回行
+        lines: list[str] = []
+        for organ in title[:k].split("　"):
+            if lines and render_width_chars(lines[-1] + "　" + organ) <= max_chars:
+                lines[-1] += "　" + organ
+            else:
+                lines.append(organ)
+        return lines + split_title(title[k:], max_chars)
     cands: set[int] = set()
     if issuer and title.startswith(issuer):
         cands.add(len(issuer))

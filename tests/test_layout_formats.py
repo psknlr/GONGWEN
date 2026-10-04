@@ -251,3 +251,9 @@ def test_signature_stamp_alone_on_last_page_is_reported(tmp_path):
     rep = layout_document(_command(5), tmp_path / "pipe")
     sig = next(c for c in rep.checks if c.rule_id == "LAY-SIGNATURE")
     assert sig.status == "pass" and sig.actual == "第2面有正文", sig.actual
+
+
+def test_joint_title_breaks_between_issuers():
+    lines = split_title("示例市卫生健康委员会　示例市财政局关于做好2026年基层医疗示范点建设资金管理工作的通知", 20.1)
+    assert lines[0] == "示例市卫生健康委员会　示例市财政局"
+    assert lines[1].startswith("关于") and "".join(lines).endswith("的通知")

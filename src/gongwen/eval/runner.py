@@ -316,6 +316,9 @@ def _expect_pipeline(eng, st, exp: dict[str, Any], admissions: list) -> tuple[li
             codes = {f.code for f in (g.authority_findings if g else [])}
             for x in v:
                 add(f"authority:{x}", x in codes, "、".join(sorted(codes)))
+        elif k == "max_occurrences":
+            for phrase, n in v.items():
+                add(f"max_occurrences:{phrase}", text.count(phrase) <= n, f"出现 {text.count(phrase)} 次")
         elif k == "procedures":
             codes = {x.code for x in (g.procedures if g else [])}
             for x in v:
