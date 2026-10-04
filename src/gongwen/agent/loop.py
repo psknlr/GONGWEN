@@ -6,6 +6,10 @@
 2. 每次模型调用都经过出网网关：本轮对话涉及的任务材料属性高于模型获准级别时，直接拒绝出网，
    并提示改用斜杠命令（确定性路径）继续办理，而不是悄悄降级；
 3. 工具结果作为不可信数据回传，其中的指令性语句不得执行；对话日志只记哈希与摘要。
+
+会话历史保持“追加式”：系统提示与工具集在首次调用模型时固定，此后新涉及的任务随下一条用户消息告知，
+而不是改写系统提示——Claude 回传的思考块绑定此前的会话前缀，前缀被改动即失效（接口返回 400），
+追加式历史也有利于提示缓存。压缩上下文改写了较早的工具结果时，不再回传此前的思考块。
 """
 
 from __future__ import annotations
@@ -20,7 +24,7 @@ from ..harness.budget import BudgetExceeded
 from ..harness.injection import UNTRUSTED_NOTICE, wrap_untrusted
 from ..harness.permissions import Principal, channel
 from ..harness.session import SessionLog
-from ..llm.base import ChatMessage, ModelRefused, ModelUnavailable, ToolDef
+from ..llm.base import ChatMessage, ModelCallFailed, ModelRefused, ModelUnavailable, ToolDef
 from ..schemas.common import Clearance
 from ..schemas.state import BudgetUsage
 from .tools import build_agent_tools
@@ -55,7 +59,7 @@ class ToolEvent:
 class AgentReply:
     text: str
     events: list[ToolEvent] = field(default_factory=list)
-    stopped: str = ""  # 非空表示提前停止的原因（出网拒绝、预算、拒答、轮数上限）
+    stopped: str = ""  # 非空表示提前停止的原因（出网拒绝、预算、拒答、接口故障、输出截断、轮数上限）
 
 
 class AgentSession:
@@ -83,6 +87,9 @@ class AgentSession:
         self.task_ids: set[str] = set()
         self.on_tool = on_tool
         self.max_turns = max_turns or self.rt.config.agent.max_turns
+        self._system: str | None = None  # 首次调用模型时固定
+        self._tools: list[ToolDef] | None = None
+        self._announced: set[str] = set()  # 已告知模型的任务
         self.log.append("chat.started", {"session_id": self.session_id, "human": human.id, "models": self.router.describe()}, actor=human.id)
 
     # ------------------------------------------------------------------
@@ -112,31 +119,52 @@ class AgentSession:
         return max(self.clearances(), key=lambda c: c.rank)
 
     def system_prompt(self) -> str:
-        extra = self.rt.instructions().strip()
-        parts = [SYSTEM_PROMPT, UNTRUSTED_NOTICE]
-        if extra:
-            parts.append("本工作区的办文说明（GONGWEN.md / AGENTS.md）：\n" + extra[:4000])
-        if self.task_ids:
-            parts.append("本轮对话涉及的任务：" + "、".join(sorted(self.task_ids)))
-        return "\n\n".join(parts)
+        """系统提示在会话首次调用模型时固定，此后不再改写（见模块说明）。"""
+        if self._system is None:
+            extra = self.rt.instructions().strip()
+            parts = [SYSTEM_PROMPT, UNTRUSTED_NOTICE]
+            if extra:
+                parts.append("本工作区的办文说明（GONGWEN.md / AGENTS.md）：\n" + extra[:4000])
+            if self.task_ids:
+                parts.append("本轮对话涉及的任务：" + "、".join(sorted(self.task_ids)))
+                self._announced |= self.task_ids
+            self._system = "\n\n".join(parts)
+        return self._system
 
     def tool_defs(self) -> list[ToolDef]:
-        return [ToolDef(t.name, t.description, t.parameters) for t in self.tools.available(self.agent)]
+        if self._tools is None:
+            self._tools = [ToolDef(t.name, t.description, t.parameters) for t in self.tools.available(self.agent)]
+        return self._tools
+
+    def _user_turn(self, text: str) -> str:
+        """系统提示固定之后新涉及的任务（/use 或工具调用），随下一条用户消息告知模型。"""
+        new = sorted(self.task_ids - self._announced) if self._system is not None else []
+        self._announced |= set(new)
+        return text + ("\n\n（本轮对话新涉及的任务：" + "、".join(new) + "）" if new else "")
 
     def _compact(self, budget_chars: int = 120_000) -> None:
-        """上下文过长时，从最早的工具结果开始替换为摘要（保留调用关系）。"""
+        """上下文过长时，从最早的工具结果开始替换为摘要（保留调用关系）。
+
+        这改写了较早的历史：此前的思考块绑定原来的会话前缀，回传会被拒绝，因此改为只回传文字与工具调用。"""
         total = sum(len(m.content) for m in self.messages)
+        edited = False
         for m in self.messages:
             if total <= budget_chars:
                 break
             if m.role == "tool" and len(m.content) > 400:
                 total -= len(m.content) - 60
                 m.content = m.content[:40] + "……（较早的工具结果已省略，可重新查询）"
+                edited = True
+        if edited:
+            for m in self.messages:
+                if m.role == "assistant":
+                    m.raw = None
 
     # ------------------------------------------------------------------
     def send(self, text: str) -> AgentReply:
         reply = AgentReply(text="")
-        self.messages.append(ChatMessage("user", text))
+        self.system_prompt()
+        self.messages.append(ChatMessage("user", self._user_turn(text)))
         self.log.append("chat.user", {"text": text}, actor=self.human.id)
         for _ in range(self.max_turns):
             self._compact()
@@ -163,9 +191,24 @@ class AgentSession:
                 reply.stopped = str(exc)
                 reply.text = f"已达到本次会话的模型调用预算：{exc}"
                 return reply
+            except ModelCallFailed as exc:  # 网络、超时、HTTP 错误：报告后停止，会话可继续
+                reply.stopped = str(exc)
+                reply.text = f"{exc}\n可稍后重试，或改用斜杠命令继续办理（/help）。"
+                return reply
+            truncated = resp.stop_reason in ("max_tokens", "length")
+            if truncated and resp.tool_calls:
+                # 输出被截断时工具参数可能不完整：不执行，也不把半截调用写入历史
+                reply.stopped = f"输出被截断（stop_reason={resp.stop_reason}）"
+                reply.text = "模型输出达到长度上限而被截断，其中的工具调用可能不完整，已停止且未执行。请缩小请求范围后重试。"
+                return reply
+            if not resp.tool_calls and not resp.text.strip():
+                # 空回复不当作成功，也不写入历史（官方接口不接受空的助手消息）
+                reply.stopped = f"模型没有返回内容（stop_reason={resp.stop_reason or '未知'}）"
+                reply.text = f"{reply.stopped}，已停止。请重试或改用斜杠命令（/help）。"
+                return reply
             self.messages.append(ChatMessage("assistant", resp.text, tool_calls=resp.tool_calls, raw=resp.raw_assistant))
             if not resp.tool_calls:
-                reply.text = resp.text
+                reply.text = resp.text + ("\n（回复达到长度上限，已被截断）" if truncated else "")
                 self.log.append("chat.assistant", {"text": resp.text}, actor="channel:agent")
                 return reply
             for call in resp.tool_calls:
