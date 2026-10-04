@@ -29,7 +29,7 @@ from ..schemas.state import Stage
 from ..schemas.task import TaskSpec
 from .base import Skill, SkillContext
 from .policy_retrieval import is_substantive
-from .references import addressee, find_incoming, is_reply, short_name
+from .references import FEEDBACK_RE, addressee, find_incoming, is_reply, short_name
 
 CN = "一二三四五六七八九十"
 SELF_REF = [("委员会", "委"), ("委", "委"), ("医院", "院"), ("研究院", "院"), ("学院", "院"), ("大学", "校"), ("学校", "校"), ("研究所", "所"), ("局", "局"), ("厅", "厅"), ("办公室", "办"), ("中心", "中心"), ("公司", "公司"), ("人民政府", "市")]
@@ -247,6 +247,13 @@ class Drafter:
             crefs = crefs + [EvidenceRef(kind="material", id=inc.material_id, note="来文")]
             self.used_purpose = ""
             text = f"{addr}{ref}收悉。经研究，现将有关情况函复如下。"
+        elif k == "函" and FEEDBACK_RE.match(subject):
+            # 对征求意见稿的反馈：来函标题与文号未提供时不编造，只写所征求意见的文件名称
+            to = self.spec.recipients.value[0] if self.spec.recipients.known and self.spec.recipients.value else None
+            addr = addressee(to.get("name", "") if isinstance(to, dict) else str(to or ""), "平行文") if to else "贵单位"
+            book = re.match(r"^对(《[^》]+》)", subject).group(1)
+            self.used_purpose = ""
+            text = f"{addr}关于征求{book}意见的来函收悉。经研究，现将{self.self_ref}意见函复如下。"
         elif k == "函":
             core = re.sub(r"^(商请|请求|恳请|请)(支持|协助|帮助|配合|解决)?", "", subject) or subject
             verb = "函询" if re.search(r"询问|咨询|了解|函询", self.spec.request_text) else ("函告" if re.search(r"告知|函告", self.spec.request_text) else "函商")

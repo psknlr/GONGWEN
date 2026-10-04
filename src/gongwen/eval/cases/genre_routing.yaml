@@ -1113,3 +1113,65 @@
     genre: 报告
     draft_contains: [示例市卫生健康委员会关于2026年第一季度示范点建设进展情况的报告, 存在的问题, 丙区尚未启动选址工作]
     draft_not_contains: [向市政府报送, 报送2026年]
+
+- id: GR-57
+  task_group: multi
+  kind: pipeline
+  title: 批转类通知：标题“××批转××关于××意见的通知”（省去“的意见的通知”），来文附后
+  request: 起草一份市政府批转市卫生健康委员会关于加强基层医疗示范点建设意见的通知
+  hints: {recipients: 各区人民政府、市政府各部门, issuer_type: 人民政府}
+  env: {unit_name: 示例市人民政府}
+  materials:
+    - name: 来文.md
+      text: |
+        示例市卫生健康委员会关于加强基层医疗示范点建设的意见
+        示卫发〔2026〕5号
+        各区卫生健康局：
+        为提升基层医疗卫生服务能力，现就加强基层医疗示范点建设提出如下意见。
+        一、2026年新建基层医疗示范点12个。
+        二、各区要将示范点建设资金纳入预算管理。
+        示例市卫生健康委员会
+        2026年3月1日
+  accept: [task_confirm, outline_confirm]
+  expect:
+    stage: 人工送审
+    genre: 通知
+    draft_contains: [示例市人民政府批转示例市卫生健康委员会关于加强基层医疗示范点建设意见的通知, （示卫发〔2026〕5号）批转给你们]
+    draft_not_contains: [的意见的通知, 关于转发]
+
+- id: GR-58
+  task_group: single
+  kind: pipeline
+  title: 对征求意见稿的反馈函：标题“关于对《××（征求意见稿）》反馈意见的函”，各条建议都写入，结束语“特此函复”，征求意见稿不当作行文依据
+  request: 就市财政局征求意见的《基层医疗补助资金管理办法（征求意见稿）》，起草一份回复意见的函
+  hints: {recipients: 示例市财政局, issuer_type: 政府部门}
+  materials:
+    - name: 意见.md
+      text: |
+        建议将第五条中的补助标准由每个示范点10万元调整为15万元。
+
+        建议在第八条增加资金绩效评价要求。
+  accept: [task_confirm, outline_confirm]
+  expect:
+    stage: 人工送审
+    genre: 函
+    draft_contains: [关于对《基层医疗补助资金管理办法（征求意见稿）》反馈意见的函, 贵局关于征求, 调整为15万元, 增加资金绩效评价要求, 特此函复]
+    draft_not_contains: [关于回复意见的函, 函商如下]
+    rules_absent_open: [GW-BASIS-001]
+
+- id: GR-59
+  task_group: single
+  kind: pipeline
+  title: 告知函：事由去掉“告知××”，开头“函告如下”，结束语“特此函告”
+  request: 起草一份告知市教育局示范点建设期间校园医务室联系方式变更的函
+  hints: {recipients: 示例市教育局, issuer_type: 政府部门}
+  materials:
+    - name: 变更.md
+      text: |
+        自2026年5月1日起，甲区社区卫生服务中心校园医务室联系电话变更为0000-1234567。
+  accept: [task_confirm, outline_confirm]
+  expect:
+    stage: 人工送审
+    genre: 函
+    draft_contains: [示例市卫生健康委员会关于示范点建设期间校园医务室联系方式变更的函, 函告如下, 特此函告]
+    draft_not_contains: [关于告知]

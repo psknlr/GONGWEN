@@ -32,6 +32,7 @@ def short_name(organ: str) -> str:
     return "单位"
 
 
+FEEDBACK_RE = re.compile(r"^对《[^》]+》反馈意见$")  # 对征求意见稿的反馈意见（函）
 _REPLY_RE = re.compile(r"复函|函复|回函|(答复|回复)[^，。]{0,12}(来函|函|询问|征求意见)")
 
 

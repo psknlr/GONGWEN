@@ -22,7 +22,7 @@ from ..schemas.state import Stage
 from ..schemas.task import TaskSpec
 from .base import Skill, SkillContext
 from .policy_retrieval import is_substantive
-from .references import find_incoming, incoming_core, is_reply
+from .references import FEEDBACK_RE, find_incoming, incoming_core, is_reply
 
 MEASURE_VERBS = ("建立", "开展", "推进", "实施", "落实", "组织", "完善", "建设", "采购", "购置", "设立", "制定", "制订", "培训", "改造", "新建", "扩建", "配备", "整治", "检查", "评估", "试点", "推广", "召开", "报送", "上报", "申请")
 DEADLINE_RE = re.compile(r"(\d{4}年\d{1,2}月(?:\d{1,2}日)?(?:前|底前|以前|之前)?|\d{1,2}月(?:\d{1,2}日)?(?:前|底前)|年底前|年内|月底前|季度末前)")
@@ -158,7 +158,7 @@ class OutlinePlanningSkill(Skill):
         incoming = find_incoming(bundle, forwarding=variant == "转发")
         reply = is_reply(spec.request_text, doc_kind) and incoming is not None
         forwarding = variant == "转发" and incoming is not None
-        plan = OutlinePlan(genre=genre.suggested_genre, material_type=genre.material_type, variant=variant, title=self._title(title_issuer, subject, genre, incoming if (reply or forwarding) else None, variant))
+        plan = OutlinePlan(genre=genre.suggested_genre, material_type=genre.material_type, variant=variant, title=self._title(title_issuer, subject, genre, incoming if (reply or forwarding) else None, variant, spec.request_text))
         plan.total_budget_chars = BUDGETS.get(doc_kind, 1500)
         usable = [f for f in ledger.facts if "example" not in f.tags and f.status not in (FactStatus.CONFLICT, FactStatus.UNKNOWN)]
         if reply or forwarding:
@@ -301,6 +301,9 @@ class OutlinePlanningSkill(Skill):
             elif role == "matter":
                 # 函、公告：必要背景 + 商洽或公告事项；涉及经费时写明测算合计（明细见附件）
                 pick = (done_or_ongoing + planned)[:6] + [f for f in computed if f.kind == "money"][:1]
+                # 材料中的建议、请求等措施性陈述也属于函商、反馈事项（与已选事实不重复）
+                picked = {f.fact_id for f in pick}
+                measure_ids = [m.measure_id for m in plan.measures if not any(r.id in picked for r in m.basis)][:8]
             used.update(f.fact_id for f in pick)
             used_text.update(f.statement for f in pick)
             core_parts = list(dict.fromkeys(f.statement for f in pick))[:2] + [m.text for m in plan.measures if m.measure_id in measure_ids][:2]
@@ -322,8 +325,8 @@ class OutlinePlanningSkill(Skill):
             plan.sections.append(sec)
         # ---- 结尾
         closing_candidates = gi.closing_candidates(genre.direction, spec.purposes[0] if spec.purposes else None, include_acceptable=False) if gi else []
-        if reply and doc_kind == "函":
-            closing_candidates = ["特此函复。", "专此函复。"]  # 复函用“函复”，不用“请函复”
+        if doc_kind == "函" and (reply or FEEDBACK_RE.match(subject)):
+            closing_candidates = ["特此函复。", "专此函复。"]  # 复函、反馈意见用“函复”，不用“请函复”
         elif doc_kind == "函" and gi:
             # 函的结束语按用途：询问用“请函复”，告知用“特此函告”，商洽用“请予支持为盼”，请求批准用“请予批准为盼”
             purpose = next((p for p, rx in (("询问答复", r"询问|咨询|了解|函询"), ("告知", r"告知|函告|通报"), ("请求批准", r"申请|请求批准|审批|核准"), ("商洽工作", r"商请|协助|支持|配合|商洽")) if re.search(rx, spec.request_text)), None)
@@ -378,13 +381,17 @@ class OutlinePlanningSkill(Skill):
         return out
 
     @staticmethod
-    def _title(issuer: str, subject: str, genre: GenreDecision, incoming=None, variant: str = "") -> str:
+    def _title(issuer: str, subject: str, genre: GenreDecision, incoming=None, variant: str = "", request: str = "") -> str:
         subject = subject.strip()
         kind = genre.material_type or genre.suggested_genre or ""
         if variant == "转发" and incoming is not None:
             # 转发类通知（实务）：标题写作“××转发××关于××的通知”，避免“关于转发……的通知的通知”
-            verb = "批转" if "批转" in subject else "转发"
-            return f"{issuer}{verb}{incoming.title}" if incoming.title.endswith("通知") else f"{issuer}关于{verb}{incoming.title}的通知"
+            verb = "批转" if "批转" in subject or "批转" in request else "转发"
+            if incoming.title.endswith("通知"):
+                return f"{issuer}{verb}{incoming.title}"
+            # “××批转××关于××意见的通知”：来文文种前的“的”省去，避免“的意见的通知”
+            core = re.sub(r"的(意见|报告|办法|方案|规定|请示|决定|纪要|要点|计划)$", r"\1", incoming.title)
+            return f"{issuer}{verb}{core}的通知"
         if kind == "命令（令）":
             return ""  # 命令（令）格式不设标题：发文机关标志、令号之后即为正文（GB/T 9704—2012 10.2）
         if kind in ("公报", "简报", "工作要点"):
