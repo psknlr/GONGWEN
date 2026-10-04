@@ -45,6 +45,7 @@ elements:
   signer: {label_font: fangsong, name_font: kaiti, size: 三号, clause: "7.2.6", strength: 规定}
   red_rule: {below_doc_number_mm: 4, color: FF0000, width_pt: 1.0, clause: "7.2.7", strength: 规定, note: 线宽国标未规定（实务取 1 磅）}
   title: {font: xiaobiaosong, size: 二号, blank_lines_before: 2, max_chars_per_line: 20, clause: "7.3.1", strength: 一般}
+  title_note: {font: kaiti, size: 三号, strength: 实务, note: 题注（决议的通过说明、公报的发布机关和日期、讲话人等）国标未规定；标题下居中，一行排不下时均衡回行}
   recipients: {blank_lines_before: 1, clause: "7.3.2", strength: 规定}
   body: {font: fangsong, size: 三号, first_indent_chars: 2, clause: "7.3.3", strength: 一般}
   levels: {1: heiti, 2: kaiti, 3: fangsong, 4: fangsong}
@@ -56,19 +57,37 @@ elements:
   imprint: {font: fangsong, size: 四号, outer_rule_mm: 0.35, inner_rule_mm: 0.25, indent_chars: 1, clause: "7.4", strength: 推荐}
   page_number: {font: songti, size: 四号, dash_offset_mm: 7, indent_chars: 1, clause: "7.5", strength: 一般}
 letter:   # 信函格式
-  organ_mark_top_from_page_mm: 30
-  rule_below_mark_mm: 4
-  bottom_rule_from_page_mm: 20
-  rule_length_mm: 170
-  first_page_number: false
+  organ_mark_top_from_page_mm: 30   # 发文机关标志上边缘至上页边
+  rule_below_mark_mm: 4             # 标志下 4mm 处印红色双线（上粗下细）
+  bottom_rule_from_page_mm: 20      # 距下页边 20mm 处印红色双线（上细下粗），仅首页
+  rule_length_mm: 170               # 两条双线长均为 170mm，居中排布
+  element_gap_ratio: 0.875          # 份号等要素、发文字号与第一条双线的距离为 3 号汉字高度的 7/8
+  title_blank_lines: 2              # 标题与其上最后一个要素“相距二行”：按与 7.3.1 一致的空二行编排（推算；若理解为行距二行则为 1）
+  rule_thick_pt: 2.25               # 实务：双线粗细与间隔国标未规定
+  rule_thin_pt: 0.75
+  rule_gap_pt: 1
+  first_page_number: false          # 首页不显示页码
   clause: "10.1"
+  strength: 规定
+  note: 首页正文仍排在 225mm 版心内，“第二条红色双线上一行如有文字，与该线的距离为3号汉字高度的7/8”未实现（版心下边缘距该线约 14mm）
 command:  # 命令（令）格式
   organ_mark_top_from_type_area_mm: 20
+  number_blank_lines: 2             # 发文机关标志下空二行居中编排令号，令号下空二行编排正文
   clause: "10.2"
 jiyao:    # 纪要格式：“纪要格式可以根据实际制定”
   mark_top_from_type_area_mm: 35
   attendee_label_font: heiti
   clause: "10.3"
   strength: 可以
+brief:    # 简报：GB/T 9704—2012 未规定简报格式，以下报头各项均为实务（参照常见简报样式），不得表述为“国标规定”
+  mark_top_from_type_area_mm: 20    # 简报名称（红色小标宋）上边缘至版心上边缘
+  mark_size: 初号
+  issue_blank_lines: 1              # 简报名称下空一行居中编排期号
+  issuer_blank_lines: 1             # 期号下空一行：左编印单位、右日期
+  rule_below_mm: 4                  # 编印单位行下 4mm 处印红色分隔线
+  rule_width_pt: 2.25
+  issuer_placeholder: 【待补：编印单位】
+  date_placeholder: 【待补：编印日期】
+  strength: 实务
 draft_label: "【{status}】本稿由公文智能体辅助起草，须经人工审核后方可使用"
 format_label: "【排版稿】本稿由公文智能体排版，正文内容未经系统核验，须经人工审核"
