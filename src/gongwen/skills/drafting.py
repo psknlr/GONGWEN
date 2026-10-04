@@ -29,7 +29,7 @@ from ..schemas.state import Stage
 from ..schemas.task import TaskSpec
 from .base import Skill, SkillContext
 from .policy_retrieval import is_substantive
-from .references import addressee, find_incoming, short_name
+from .references import addressee, find_incoming, is_reply, short_name
 
 CN = "一二三四五六七八九十"
 SELF_REF = [("委员会", "委"), ("委", "委"), ("医院", "院"), ("研究院", "院"), ("学院", "院"), ("大学", "校"), ("学校", "校"), ("研究所", "所"), ("局", "局"), ("厅", "厅"), ("办公室", "办"), ("中心", "中心"), ("公司", "公司"), ("人民政府", "市")]
@@ -193,6 +193,15 @@ class Drafter:
         elif k == "报告":
             tail = f"现将{subject}报告如下。" if subject.endswith("情况") else f"现将{subject}有关情况报告如下。"
             text = (f"根据{cites}有关要求，" if cites else "") + tail
+        elif k == "函" and is_reply(self.spec.request_text, k) and find_incoming(self.bundle):
+            # 复函：引来函标题和文号，称谓用“贵×”，不沿用来函中的发文目的
+            inc = find_incoming(self.bundle)
+            to = self.spec.recipients.value[0] if self.spec.recipients.known and self.spec.recipients.value else None
+            addr = addressee(to.get("name", "") if isinstance(to, dict) else str(to or ""), "平行文") if to else "贵单位"
+            ref = f"《{inc.title}》" + (f"（{inc.doc_number}）" if inc.doc_number else self.placeholder("reply_no", "来函发文字号"))
+            crefs = crefs + [EvidenceRef(kind="material", id=inc.material_id, note="来文")]
+            self.used_purpose = ""
+            text = f"{addr}{ref}收悉。经研究，现将有关情况函复如下。"
         elif k == "函":
             core = re.sub(r"^(商请|请求|恳请|请)(支持|协助|帮助|配合|解决)?", "", subject) or subject
             text = (purpose + "，" if purpose else "") + f"现就{core}有关事项函商如下。"

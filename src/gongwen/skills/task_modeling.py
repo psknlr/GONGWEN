@@ -173,9 +173,10 @@ def extract_subject(text: str, genre: str | None) -> str:
     t = re.sub(r"(。|！|\?|？)$", "", t)
     t = re.sub(r"^(根据|依据|按照)[^，。]{0,16}?(整理|形成|起草|撰写|写)(出)?(一份|一个|一篇)?", "", t)
     if genre:
-        for name in {genre, genre.replace("（令）", ""), "会议纪要"}:
+        for name in sorted({genre, genre.replace("（令）", ""), "会议纪要"} | ({"复函"} if genre == "函" else set()), key=len, reverse=True):
             if t.endswith(name):
                 t = t[: -len(name)]
+                break
     t = t.rstrip("的").strip()
     # “给××发函，商请……”“向××行文……”：收发文机关和行文动作不属于事由
     t = re.sub(r"^(给|向|致|对)[^，。]{1,30}?(发函|去函|致函|行文|发文|写信|去信|发个函|发一个函)[，,、]?", "", t)

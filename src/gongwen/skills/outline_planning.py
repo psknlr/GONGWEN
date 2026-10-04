@@ -22,7 +22,7 @@ from ..schemas.state import Stage
 from ..schemas.task import TaskSpec
 from .base import Skill, SkillContext
 from .policy_retrieval import is_substantive
-from .references import find_incoming
+from .references import find_incoming, incoming_core, is_reply
 
 MEASURE_VERBS = ("建立", "开展", "推进", "实施", "落实", "组织", "完善", "建设", "采购", "购置", "设立", "制定", "制订", "培训", "改造", "新建", "扩建", "配备", "整治", "检查", "评估", "试点", "推广", "召开", "报送", "上报", "申请")
 DEADLINE_RE = re.compile(r"(\d{4}年\d{1,2}月(?:\d{1,2}日)?(?:前|底前|以前|之前)?|\d{1,2}月(?:\d{1,2}日)?(?:前|底前)|年底前|年内|月底前|季度末前)")
@@ -97,9 +97,14 @@ class OutlinePlanningSkill(Skill):
         gi = kb.genre(doc_kind)
         subject = str(spec.subject.value or "有关事项")
         issuer = spec.issuer.value.get("name") if spec.issuer.known and isinstance(spec.issuer.value, dict) else ""
-        plan = OutlinePlan(genre=genre.suggested_genre, material_type=genre.material_type, title=self._title(issuer, subject, genre, find_incoming(bundle)))
+        incoming = find_incoming(bundle)
+        reply = is_reply(spec.request_text, doc_kind) and incoming is not None
+        plan = OutlinePlan(genre=genre.suggested_genre, material_type=genre.material_type, title=self._title(issuer, subject, genre, incoming if reply else None))
         plan.total_budget_chars = BUDGETS.get(doc_kind, 1500)
         usable = [f for f in ledger.facts if "example" not in f.tags and f.status not in (FactStatus.CONFLICT, FactStatus.UNKNOWN)]
+        if reply:
+            # 答复类文稿：来文自身的陈述（对方的请求、背景）不是本机关的事实，不写入答复内容
+            usable = [f for f in usable if not any(s.material_id == incoming.material_id for s in f.sources)]
         planned = [f for f in usable if f.status == FactStatus.PROPOSED]
         current = [f for f in usable if f.status != FactStatus.PROPOSED]
         problems = [f for f in current if any(c in f.statement for c in PROBLEM_CUES)]
@@ -134,7 +139,6 @@ class OutlinePlanningSkill(Skill):
         sections = GENRE_SECTIONS.get(doc_kind) or [(c["key"], c["name"], (c.get("functions") or ["事实"])[0]) for c in (gi.contract if gi else [])]
         meeting_decided = [f for f in usable if "meeting:decided" in f.tags]
         meeting_discussed = [f for f in usable if "meeting:discussion" in f.tags]
-        incoming = find_incoming(bundle)
         # 已作为措施来源或已被前面章节使用的事实，不在“要求”“保障”等章节重复陈述
         used: set[str] = set(measure_sources)
         used_text: set[str] = {f.statement for f in usable if f.fact_id in measure_sources}
@@ -173,9 +177,6 @@ class OutlinePlanningSkill(Skill):
                 pick = meeting_discussed
             elif role in ("requirements", "evaluation"):
                 pick = [f for f in fresh(usable) if DATE_RE.search(f.statement) or "报送" in f.statement or "联系人" in f.statement]
-                if doc_kind == "批复":
-                    # 批复的执行要求只能来自决定类材料，不能把来文自身的陈述当作要求
-                    pick = [f for f in pick if not (incoming and any(s.material_id == incoming.material_id for s in f.sources))]
                 pick = pick[:4]
             if role == "matter":
                 # 函：必要背景 + 商洽事项；涉及经费时写明测算合计（明细见附件）
@@ -201,6 +202,8 @@ class OutlinePlanningSkill(Skill):
             plan.sections.append(sec)
         # ---- 结尾
         closing_candidates = gi.closing_candidates(genre.direction, spec.purposes[0] if spec.purposes else None) if gi else []
+        if reply and doc_kind == "函":
+            closing_candidates = ["特此函复。", "专此函复。"]  # 复函用“函复”，不用“请函复”
         plan.closing = ParagraphPlan(para_id=sc.ids.next("PP"), function="结语" if doc_kind != "请示" else "请求", purpose="结束语", core=closing_candidates[0] if closing_candidates else "", budget_chars=30)
         if doc_kind == "请示" and not money and spec.resource_mentions:
             plan.open_questions.append("请明确请示事项：申请金额、资金来源与用途。")
@@ -248,10 +251,10 @@ class OutlinePlanningSkill(Skill):
     @staticmethod
     def _title(issuer: str, subject: str, genre: GenreDecision, incoming=None) -> str:
         subject = subject.strip()
-        if genre.suggested_genre == "批复" and incoming is not None:
-            core = re.sub(r"^.*?关于", "", incoming.title)
-            core = re.sub(r"的(请示|报告|函|意见)$", "", core)
-            return f"{issuer}关于{core}的批复" if issuer else f"关于{core}的批复"
+        if genre.suggested_genre in ("批复", "函") and incoming is not None:
+            core = incoming_core(incoming.title) if genre.suggested_genre == "函" else re.sub(r"的(请示|报告|函|意见)$", "", re.sub(r"^.*?关于", "", incoming.title))
+            kind = "批复" if genre.suggested_genre == "批复" else "复函"
+            return f"{issuer}关于{core}的{kind}" if issuer else f"关于{core}的{kind}"
         if genre.suggested_genre == "纪要":
             meeting = re.sub(r"(的)?(会议)?(纪要)?$", "", subject).strip("的") or "【待补：会议名称】"
             return f"{meeting}{'会议' if not meeting.endswith(('会', '会议')) else ''}纪要"

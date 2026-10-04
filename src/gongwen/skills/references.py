@@ -32,6 +32,21 @@ def short_name(organ: str) -> str:
     return "单位"
 
 
+_REPLY_RE = re.compile(r"复函|函复|回函|(答复|回复)[^，。]{0,12}(来函|函|询问|征求意见)")
+
+
+def is_reply(request_text: str, doc_kind: str) -> bool:
+    """答复类文稿：批复，或答复来函的复函。"""
+    return doc_kind == "批复" or (doc_kind == "函" and bool(_REPLY_RE.search(request_text or "")))
+
+
+def incoming_core(title: str) -> str:
+    """来文事由：“示例市财政局关于商请提供……情况的函”→“提供……情况”。"""
+    core = re.sub(r"^.*?关于", "", title)
+    core = re.sub(r"的(请示|报告|函|意见)$", "", core)
+    return re.sub(r"^(商请|恳请|请求|请)(贵[^\s]{1,2})?", "", core) or core
+
+
 def addressee(organ: str, direction: str = "下行文") -> str:
     """下行文用“你X”，平行文与不相隶属机关用“贵X”。"""
     return ("你" if direction == "下行文" else "贵") + short_name(organ)
@@ -57,4 +72,4 @@ def find_incoming(bundle: SourceBundle | None) -> Incoming | None:
     return None
 
 
-__all__ = ["Incoming", "addressee", "find_incoming", "short_name"]
+__all__ = ["Incoming", "addressee", "find_incoming", "incoming_core", "is_reply", "short_name"]

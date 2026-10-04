@@ -373,3 +373,32 @@
     genre: 批复
     draft_contains: [【待补：答复意见, 收悉]
     draft_not_contains: [同意安排, 120万元]
+
+- id: GR-20
+  task_group: multi
+  kind: pipeline
+  title: 复函：引来函标题与文号、称“贵局”、结束语“特此函复”，来函自身的请求与背景不写成本机关事实
+  request: 起草一份答复市财政局来函的复函
+  hints: {recipients: 示例市财政局, issuer_type: 政府部门}
+  materials:
+    - name: 来函.txt
+      text: |
+        示例市财政局关于商请提供基层医疗示范点建设情况的函
+        示财函〔2026〕8号
+        示例市卫生健康委员会：
+        为做好2026年预算编制工作，请贵委提供基层医疗示范点建设情况及2026年经费需求。
+        特此函达。
+        示例市财政局
+        2026年2月10日
+    - name: 情况说明.md
+      text: |
+        截至2025年12月31日，我委已建成基层医疗示范点8个，覆盖5个区。
+
+        2026年拟新建示范点12个，所需经费合计120万元。
+  accept: [task_confirm, outline_confirm]
+  expect:
+    stage: 人工送审
+    genre: 函
+    draft_contains: [关于提供基层医疗示范点建设情况的复函, 贵局《示例市财政局关于商请提供基层医疗示范点建设情况的函》（示财函〔2026〕8号）收悉, 已建成基层医疗示范点8个, 特此函复]
+    draft_not_contains: [请贵委提供, 为做好2026年预算编制工作, 请函复, 函商]
+    numbers_sourced: true

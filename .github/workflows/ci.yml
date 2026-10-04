@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master, "claude/**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: 测试与回归评测（Python ${{ matrix.python }}）
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+      - name: 安装
+        run: pip install -e ".[dev]"
+      - name: 单元与端到端测试（离线确定性路径）
+        run: python -m pytest -o addopts="" -q
+      - name: 回归评测（完整系统；任一用例未通过即失败）
+        run: gongwen eval --out eval-report
+      - name: 消融与基线（只报告，不作为门槛）
+        if: matrix.python == '3.12'
+        run: gongwen eval --ablate all --baselines --out eval-ablation || true
+      - name: 上传评测报告
+        if: always() && matrix.python == '3.12'
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-report
+          path: |
+            eval-report/
+            eval-ablation/
+          if-no-files-found: ignore
+
+  render:
+    name: 版式渲染核验（LibreOffice）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: 安装 LibreOffice 与 poppler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libreoffice-writer poppler-utils fonts-noto-cjk
+      - name: 安装
+        run: pip install -e ".[dev]"
+      - name: 渲染相关测试
+        run: python -m pytest -o addopts="" -q tests/test_engine_e2e.py

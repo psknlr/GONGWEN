@@ -51,11 +51,12 @@
 | 1 任务契约；缺口先查材料，只问影响文种、权限、重要事实的问题 | `TaskModelingSkill._gaps`（`ask_user` 仅限关键缺口） | GR-06、GR-07 |
 | 2 原始材料不变、结构化副本带定位；保留正文—附件—表注关系 | `MaterialStore`（内容哈希只读）；`parsing/*`（段落、单元格、页行定位，表注关系） | `test_parsing_admission.py` |
 | 3 文种、权限与专门程序（合法性审核、公平竞争审查）；输出“需要哪些真实程序” | `genre_authority._authority/_procedures`；`ProcedureRequirement.status` 不生成“已通过” | GR-06、GR-07；`test_rules.py` |
+| 3 续：答复类文种（批复）引用来文、按受文机关定称谓，答复意见只来自真实决定 | `skills/references.py`（来文标题与文号识别、“你委/贵局”）；批复的“答复意见”只取会议议定或审批材料，缺失时留待补，不代为同意 | GR-18、GR-19 |
 | 4 精确检索 + 语义检索 + 适用范围 + 版本 + 条款；检索限制条件；三个问题分别检查 | `PolicyLibrary.exact/search/constraints/applicability`；`GW-BASIS-001/002/003/005` | FB-09～11、FB-13；消融 no_temporal_check |
 | 5 事实账本六种状态；程序复算；口径与时点 | `FactLedger`、`CalcCheck`、`GW-FACT-001～006` | FB-01～04；消融 no_fact_ledger |
 | 6 提纲与措施表；候选方案仅在材料含多种规模时提出 | `OutlinePlan`、`AlternativePlan`；提纲确认节点 | GR-15 |
 | 7 受约束生成；确定性检查 + 语义审校（独立上下文）+ 人工；结构化问题报告；自动修订两轮 | `DraftingSkill._validate`；`IndependentReviewSkill`（新建检查上下文，模型意见须定位）；`ReviewIssue`；`budget.max_revision_rounds=2` | FB-14、SR-07；消融 no_independent_review |
-| 8 定向修订；关键事实变更联动；已审批版本实质修改须复审 | `RevisionSkill.fact_change/human_edit/propose`；`Engine._revise` 使审批失效 | SR-01～05；消融 no_targeted_revision |
+| 8 定向修订；关键事实变更联动；已审批版本实质修改须复审 | `RevisionSkill.apply_fact_change/propagate_values/human_edit/propose`（按位置替换，只改引用该事实或同一小句出现其属性的数字）；`Engine._revise` 使审批失效 | SR-01～05、SR-17；消融 no_targeted_revision |
 | 9 DocumentIR → 版式编译；条件性规则；实际渲染检查；字体替代如实报告；不填成文日期与文号 | `layout/`（`docx_checks` 回读、`render_check` 渲染测量、字体替代检查）；占位字段 | `test_engine_e2e::test_render_check_with_libreoffice`；FL-14 |
 
 ## 六、四项差异化能力
@@ -63,8 +64,8 @@
 | 设计要求 | 实现 | 验证 |
 |---|---|---|
 | §6.1 有证据的文稿：来源 → 事实/依据 → 表述 → 问题 → 版本 | 句级 `EvidenceRef`；`workbench_data` 证据映射；点击句子定位 | `test_workbench_server.py`；无来源数字句占比指标 |
-| §6.2 语义强度保持：义务强度、拟议→已开展、范围、原则上及例外、讨论→决定 | `rules/semantics.py: semantic_diff`；措施八要素；人工修改句的语义变化转人工确认 | SR-02、SR-03；`test_rules.py` |
-| §6.3 跨文件一致性：同一事项共享事项数据模型 | 事项级事实账本（`matters/<id>/ledger.json`）；`check_siblings`；事实变更定位受影响文稿 | `test_engine_e2e.py`；消融 no_consistency_check |
+| §6.2 语义强度保持：义务强度、拟议→已开展、范围、原则上及例外、讨论→决定 | `rules/semantics.py: semantic_diff`（义务词按增删比较；事实状态按数字所在小句判断 `progress_at`；会议决策先看否定与建议 `meeting_decision`）；措施八要素；人工修改句的语义变化转人工确认 | SR-02、SR-03、SR-18～20；`test_rule_precision.py` |
+| §6.3 跨文件一致性：同一事项共享事项数据模型 | 事项级事实账本（`matters/<id>/ledger.json`）；`check_siblings`；一份文稿变更关键事实后，同一事项的其他文稿生成新版本、使其审批失效并转回审校（`Engine._propagate_to_siblings`） | `test_engine_e2e.py::test_matter_siblings_follow_fact_change_and_keep_own_materials`；消融 no_consistency_check |
 | §6.4 必要性与负担检查 | `check_burden`、`check_necessity` | SR-11 |
 
 ## 七、安全与部署
