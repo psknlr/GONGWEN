@@ -156,8 +156,20 @@ def preliminary_genre(purposes: list[str], direction: str, requested: str | None
     return requested, "按用户要求"
 
 
+_ADDRESSING = re.compile(r"(请|帮我|帮忙)?(给|向|致|对)[^，。]{1,30}?(发函|去函|致函|行文|发文|写信|去信|发个函|发一个函)")
+_SUBJECT_VERBS = re.compile(r"(申请|请求|报告|汇报|部署|开展|商请|印发|整理|做好|加强|推进|关于)")
+
+
 def extract_subject(text: str, genre: str | None) -> str:
-    t = re.sub(r"^(请|麻烦|帮我|帮忙|需要|拟|我想|我要)?(帮我|给我)?(起草|写|拟写|拟|撰写|草拟|准备)?(一份|一个|个|篇|一篇)?", "", text.strip())
+    # 多个小句时，选含文种词或主要办文动词的小句；其余小句（补充事实、对文号日期的要求等）不属于事由
+    clauses = [c.strip() for c in re.split(r"[，,；;。！!？?：:\n]", text) if c.strip()]
+    # “给××发函”“向××行文”只说明收文对象，不是事由
+    clauses = [c for c in clauses if not _ADDRESSING.fullmatch(c)] or clauses
+    if len(clauses) > 1:
+        t = next((c for c in clauses if genre and (c.endswith(genre) or f"的{genre}" in c)), None) or next((c for c in clauses if _SUBJECT_VERBS.search(c)), clauses[0])
+    else:
+        t = text.strip()
+    t = re.sub(r"^(请|麻烦|帮我|帮忙|需要|拟|我想|我要)?(帮我|给我)?(起草|写|拟写|拟|撰写|草拟|准备|整理)?(一份|一个|个|篇|一篇)?", "", t)
     t = re.sub(r"(。|！|\?|？)$", "", t)
     t = re.sub(r"^(根据|依据|按照)[^，。]{0,16}?(整理|形成|起草|撰写|写)(出)?(一份|一个|一篇)?", "", t)
     if genre:
@@ -273,6 +285,9 @@ class TaskModelingSkill(Skill):
         if sc.model_available("light"):
             self._model_refine(sc, spec, text, bundle)
         self._gaps(spec, bundle, requested, genre)
+        process = sorted({m.group(1) for m in re.finditer(r"(发文字号|文号|成文日期|签发人|印发日期|份号)", text)})
+        if process:
+            spec.notes.append(f"需求中涉及{'、'.join(process)}：这些字段只能来自真实办理流程，系统不代为填写，文稿中保留占位。")
         if requested and genre and requested != genre:
             spec.notes.append(f"用户字面要求“{requested}”，但办文意图（{'、'.join(purposes) or '未识别'}）更适合“{genre}”：{why}。请确认。")
         sc.note("skill.task_modeling", {"requested": requested, "suggested": genre, "purposes": purposes, "direction": direction, "gaps": [g.field for g in spec.gaps]})

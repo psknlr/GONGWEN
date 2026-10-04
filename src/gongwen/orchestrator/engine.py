@@ -85,7 +85,11 @@ class Engine:
         return self.rt.session_log(task_id)
 
     def _clearances(self, st: TaskState) -> list[Clearance]:
+        """本任务处理时会用到的全部材料的属性：本任务的准入结果 + 同一事项下已准入的材料（解析时一并使用）。"""
         cl = [a.detected_clearance if a.declared_clearance is None else max((a.detected_clearance, a.declared_clearance), key=lambda c: c.rank) for a in AdmissionList.load(self.store, st.task_id) if a.decision == AdmissionDecision.ALLOW]
+        for m in self.rt.materials.list(st.matter_id):
+            if m.admission == AdmissionDecision.ALLOW:
+                cl.append(m.clearance if m.declared_clearance is None else max((m.clearance, m.declared_clearance), key=lambda c: c.rank))
         return cl or [Clearance.PUBLIC]
 
     def sc(self, st: TaskState, log: SessionLog) -> SkillContext:
@@ -115,7 +119,10 @@ class Engine:
         self._require(by, Action.MATERIAL_ADD, st.matter_id)
         if authoritative and not by.is_human:
             raise PermissionError("只有人工通道可以把材料标记为权威来源")
-        mid = st.ids.next("MAT")
+        # 材料按事项存放：编号在事项内分配，同一事项的多个任务不会互相覆盖
+        mids = self._matter_ids(st)
+        mid = mids.next("MAT")
+        self._save_matter_ids(st, mids)
         mat = self.rt.materials.put(st.matter_id, mid, filename, data, by.id, declared, role, description)
         mat.authoritative = authoritative
         # 准入扫描：本地确定性规则，先于任何模型处理
@@ -806,20 +813,27 @@ class Engine:
         ledger = self.load_matter_ledger(st)
         combined = PatchSet(doc_id=ir.doc_id, round=rnd, from_version=ir.version)
         work = ir
+        all_olds: dict = {}
+        reasons: list[str] = []
         for fc in data.get("fact_changes") or []:
             change = fc if isinstance(fc, FactChange) else FactChange(**fc, by=by.id) if "by" not in fc else FactChange(**fc)
-            ps = skill.fact_change(sc, work, ledger, change, rnd)
+            olds = skill.apply_fact_change(ledger, change)
+            f = ledger.get(change.fact_id)
+            reason = f"关键事实变更：{f.attribute} {olds['__before__']} → {f.display_value()}（{change.reason or '人工变更'}）"
+            reasons.append(reason)
+            ps = skill.propagate_values(sc, work, ledger, olds, reason, rnd)
+            ps.fact_changes = [change]
+            for k, v in olds.items():
+                all_olds.setdefault(k, v)  # 保留最早的取值，供同一事项其他文稿联动
             combined.fact_changes += ps.fact_changes
             work = skill.apply(sc, work, ps)
             work.version = ir.version  # 版本在最后统一递增
             combined.patches += ps.patches
-            # 同一事项其他文稿：定位受影响文稿（在各自任务中复核）
-            for sib in matter_siblings(sc, ir.doc_id):
-                if any(r.id == change.fact_id for _, s in sib.iter_sentences() for r in s.refs):
-                    combined.affected_docs.append(sib.doc_id)
         if ledger is not None and data.get("fact_changes"):
             self.save_matter_ledger(st, ledger)
             sc.save("fact_ledger", ledger)
+            # 同一事项的其他文稿：联动更新并退回审校（设计 §6.3）
+            combined.affected_docs += self._propagate_to_siblings(st, by, ledger, all_olds, "；".join(reasons))
         for e in data.get("edits") or []:
             ps = skill.human_edit(sc, work, e["sid"], e["text"], by.id, rnd)
             work = skill.apply(sc, work, ps)
@@ -850,6 +864,62 @@ class Engine:
         st.options.pop("escalated_v", None)
         log.append("revision.requested", {"patches": len(combined.patches), "fact_changes": len(combined.fact_changes), "affected_docs": combined.affected_docs, "instruction": bool(data.get("instruction"))}, actor=by.id)
         self._transition(st, log, Stage.REVIEW, "人工发起修订后重新审校")
+
+    def _matter_tasks(self, st: TaskState) -> list[TaskState]:
+        out = []
+        for tid in self.store.list_tasks():
+            if tid == st.task_id:
+                continue
+            try:
+                other = self.load_state(tid)
+            except (KeyError, ValueError):
+                continue
+            if other.matter_id == st.matter_id:
+                out.append(other)
+        return out
+
+    def _propagate_to_siblings(self, st: TaskState, by: Principal, ledger: FactLedger, olds: dict, reason: str) -> list[str]:
+        """一处关键事实修改后，定位同一事项下引用了该事实（或其计算结果）的文稿，联动更新并退回审校。"""
+        changed = {k for k in olds if not k.startswith("__")}
+        affected: list[str] = []
+        skill = self.rt.skills.get("gongwen-targeted-revision")
+        for other in self._matter_tasks(st):
+            oir = self.current_ir(other)
+            if oir is None or other.stage in (Stage.FAILED, Stage.BLOCKED):
+                continue
+            if not any(r.id in changed for _, s in oir.iter_sentences() for r in s.refs):
+                continue
+            olog = self.log(other.task_id)
+            osc = self.sc(other, olog)
+            rnd = len([a for a in other.artifacts if a.startswith("human_patch_")]) + 1
+            ps = skill.propagate_values(osc, oir, ledger, olds, f"同一事项其他文稿（{st.task_id}）{reason}", rnd)
+            new = skill.apply(osc, oir, ps) if ps.patches else deepcopy(oir)
+            new.version = oir.version + 1
+            new.based_on_version = oir.version
+            new.status = DocStatus.DISCUSSION
+            new.meta.update({"created_at": utcnow().isoformat(), "author": by.id, "summary": f"同一事项关键事实变更联动（来自 {st.task_id}）"})
+            ps.to_version = new.version
+            self.store.save_version(other.task_id, new.doc_id, new.version, new)
+            other.current_version = new.version
+            osc.save(f"human_patch_{rnd}", ps)
+            osc.save("fact_ledger", ledger)
+            note = f"同一事项的任务 {st.task_id} 变更了关键事实（{reason}），本稿已联动更新，须重新审校并经人工确认"
+            other.errors.append(note)
+            if other.approvals:
+                other.approvals = []
+                other.errors.append("已审批版本因关键事实变更而修改：须报原签批人复审（条例第二十五条（一））")
+                olog.append("approval.invalidated", {"doc_id": oir.doc_id, "from_version": oir.version, "cause": st.task_id}, actor=by.id)
+            for cp in other.pending_checkpoints():
+                cp.status = "cancelled"
+            olog.append("matter.fact_changed", {"from_task": st.task_id, "facts": sorted(changed), "patches": len(ps.patches)}, actor=by.id)
+            if other.stage not in (Stage.ADMISSION, Stage.TASK_CONFIRM, Stage.PARSING, Stage.EVIDENCE, Stage.OUTLINE_CONFIRM, Stage.DRAFTING):
+                other.options["review_round"] = 0
+                other.options["revision_round"] = 0
+                other.budget.revision_rounds = 0
+                self._transition(other, olog, Stage.REVIEW, f"同一事项关键事实变更（来自 {st.task_id}）")
+            self.save_state(other)
+            affected.append(oir.doc_id)
+        return affected
 
     # ================================================================ 修改建议（模型通道提交，人工采纳）
     def propose_revision(self, task_id: str, *, by: Principal, instruction: str, reason: str = "") -> dict[str, Any]:
@@ -967,7 +1037,13 @@ class Engine:
         """同一事项的多份文稿共享经确认的事实：相同来源与陈述的事实沿用原编号与核验状态。"""
         current = self.load_matter_ledger(st) or FactLedger()
         ids = self._matter_ids(st)
-        key = lambda f: (f.statement, f.sources[0].material_id if f.sources else "", f.sources[0].path if f.sources else "", str(f.value), f.unit)  # noqa: E731
+        shas = {m.material_id: m.sha256 for m in self.rt.materials.list(st.matter_id)}
+
+        def key(f):  # 同一份文件（按内容哈希）中同一位置的同一陈述，视为同一事实
+            src = f.sources[0] if f.sources else None
+            origin = shas.get(src.material_id, src.material_id) if src else ""
+            return (f.statement, origin, src.path if src else "", str(f.value), f.unit)
+
         existing = {key(f): f for f in current.facts}
         mapping: dict[str, str] = {}
         for f in new.facts:

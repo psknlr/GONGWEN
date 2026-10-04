@@ -267,19 +267,29 @@ class RevisionSkill(Skill):
 
     # ------------------------------------------------------------------ 关键事实变更传播
     def fact_change(self, sc: SkillContext, ir: DocumentIR, ledger: FactLedger, change: FactChange, round_no: int) -> PatchSet:
-        ps = PatchSet(doc_id=ir.doc_id, round=round_no, from_version=ir.version, fact_changes=[change])
+        """更新事项账本中的事实（及依赖它的合计），并联动本稿中的句子与附件表格。"""
+        olds = self.apply_fact_change(ledger, change)
+        f = ledger.get(change.fact_id)
+        reason = f"关键事实变更：{f.attribute} {olds['__before__']} → {f.display_value()}（{change.reason or '人工变更'}）"
+        ps = self.propagate_values(sc, ir, ledger, olds, reason, round_no)
+        ps.fact_changes = [change]
+        return ps
+
+    @staticmethod
+    def apply_fact_change(ledger: FactLedger, change: FactChange) -> dict:
+        """只改账本：返回变更前的取值（含受影响的计算结果），供本稿及同一事项其他文稿联动使用。"""
         f = ledger.get(change.fact_id)
         if f is None:
             raise KeyError(f"事实不存在：{change.fact_id}")
-        olds: dict[str, tuple[float, str]] = {}
+        olds: dict = {}
         if isinstance(f.value, (int, float)):
             olds[f.fact_id] = (float(f.value), f.unit)
-        before_display = f.display_value()
+        olds["__before__"] = f.display_value()
         f.value = float(change.new_value) if isinstance(change.new_value, (int, float)) or re.fullmatch(r"-?\d+(\.\d+)?", str(change.new_value)) else change.new_value
         if change.unit:
             f.unit = change.unit
         f.status = FactStatus.VERIFIED
-        f.verification = Verification(method="人工变更", by=change.by, note=f"{before_display} → {f.display_value()}；{change.reason}")
+        f.verification = Verification(method="人工变更", by=change.by, note=f"{olds['__before__']} → {f.display_value()}；{change.reason}")
         # 重新计算依赖它的计算结果（如合计）
         for dep in ledger.dependents(change.fact_id):
             if dep.formula and isinstance(dep.value, (int, float)):
@@ -289,12 +299,18 @@ class RevisionSkill(Skill):
                     dep.value = round(sum(float(v) for v in vals), 6)
                     dep.formula.result_repr = dep.display_value()
                     dep.statement = re.sub(r"合计[\d.]+", f"合计{dep.value:g}", dep.statement)
-        changed_ids = set(olds)
+        return olds
+
+    def propagate_values(self, sc: SkillContext, ir: DocumentIR, ledger: FactLedger, olds: dict, reason: str, round_no: int) -> PatchSet:
+        """把账本中已变更的取值同步到文稿句子与附件表格（逐处生成补丁，留痕可复核）。"""
+        ps = PatchSet(doc_id=ir.doc_id, round=round_no, from_version=ir.version)
+        values = {k: v for k, v in olds.items() if not k.startswith("__")}
+        changed_ids = set(values)
         for b, s in ir.iter_sentences():
             hit_refs = [r.id for r in s.refs if r.id in changed_ids]
             mentions = extract_numbers(s.text)
             new_text = s.text
-            for fid, (old_v, unit) in olds.items():
+            for fid, (old_v, unit) in values.items():
                 nf = ledger.get(fid)
                 for m in mentions:
                     if same_quantity(m, old_v, unit) and (fid in hit_refs or m.kind == nf.kind):
@@ -308,7 +324,7 @@ class RevisionSkill(Skill):
                         op="replace",
                         before=s.text,
                         after=new_text,
-                        reason=f"关键事实变更：{f.attribute} {before_display} → {f.display_value()}（{change.reason or '人工变更'}）",
+                        reason=reason,
                         basis=[EvidenceRef(kind="fact", id=x) for x in sorted(changed_ids)],
                         author="human",
                         status="proposed",
@@ -321,7 +337,7 @@ class RevisionSkill(Skill):
                     continue
                 for r_idx, row in enumerate(blk.table):
                     for c_idx, cell in enumerate(row):
-                        for fid, (old_v, unit) in olds.items():
+                        for fid, (old_v, unit) in values.items():
                             nf = ledger.get(fid)
                             try:
                                 cv = float(cell.replace(",", ""))

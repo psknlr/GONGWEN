@@ -11,6 +11,7 @@ import re
 from collections import defaultdict
 
 from ..harness.injection import UNTRUSTED_NOTICE, wrap_untrusted
+from ..harness.injection import detect as detect_injection
 from ..llm.base import ChatMessage, ModelRefused, ModelUnavailable
 from ..rules.semantics import progress_of
 from ..rules.textutil import COUNT_UNITS, MONEY_UNITS, extract_numbers, split_sentences
@@ -37,6 +38,22 @@ _SUBSTANTIVE = re.compile(
     r"|应当|必须|务必|须于|须在|要在|要于|确保|不得|严禁|完成|报送|提交)"
 )
 _MEETING_UNDECIDED = re.compile(r"(未作决定|未作出决定|未决定|未议定|未形成(决定|意见|结论)|不同意|暂不|暂缓|待研究|再研究|另行研究|进一步研究|需进一步|会后研究|未达成一致)")
+_PROCESS_FIELDS = re.compile(r"(发文字号|文号|成文日期|签发人|印发日期|份号|落款日期)")
+
+
+def request_clauses(text: str) -> list[str]:
+    """把需求拆成小句；去掉“起草一份……”等办理指令和办理流程字段，只保留可能是事实陈述的小句。"""
+    out = []
+    for c in re.split(r"[，,；;。！!？?\n]", text):
+        c = c.strip()
+        if not c or _PROCESS_FIELDS.search(c):
+            continue
+        if re.match(r"^(请|麻烦|帮我|帮忙|需要)?(起草|写|拟写|撰写|草拟|准备|整理|形成)", c):
+            continue
+        out.append(c + "。")
+    return out
+
+
 _CELL_PATH = re.compile(r"^(?:(?P<sheet>[^!]+)!(?P<col>[A-Z]{1,3})(?P<row>\d+)|table(?P<t>\d+)\.r(?P<r>\d+)\.c(?P<c>\d+))$")
 
 
@@ -61,6 +78,10 @@ def infer_attribute(sentence: str, start: int, end: int, unit: str) -> str:
     changed = True
     while changed and seg:
         changed = False
+        # 主语自称与时点前缀不属于“属性”（“我委已建成示范点”“2026年拟新建示范点”的属性都是“示范点”）
+        stripped = re.sub(r"^(我委|我局|我院|我校|我所|我单位|本单位|全市|全省|全区|今年|去年|当年|截至|截止|\d{4}年(\d{1,2}月)?(\d{1,2}日)?(底|末)?)", "", seg)
+        if stripped != seg and stripped:
+            seg, changed = stripped, True
         for w in _LEAD_WORDS:
             if seg.endswith(w):
                 seg = seg[: -len(w)]
@@ -102,9 +123,9 @@ class FactLedgerSkill(Skill):
         for tid, units in table_units.items():
             mat = mats.get(units[0].material_id)
             self._table_facts(sc, ledger, tid, units, mat, notes_by_table.get(tid, ""))
-        # 需求文本中给出的数字（用户陈述）
+        # 需求文本中给出的数字（用户陈述）：只取数字所在的小句，办理流程字段（发文字号、成文日期等）不是事实
         req_loc = Locator(material_id="request", kind="request", path="request", excerpt=spec.request_text[:60])
-        for s in split_sentences(spec.request_text):
+        for s in request_clauses(spec.request_text):
             for n in extract_numbers(s):
                 ledger.facts.append(
                     Fact(
@@ -160,6 +181,10 @@ class FactLedgerSkill(Skill):
         if u.kind == "heading" or _TITLE_LIKE.match(u.text.strip()):
             return  # 材料标题、层次标题不是事实陈述
         for s in split_sentences(u.text):
+            if detect_injection(s):
+                # 资料中的指令性语句只是数据：不作为事实，也不让其中的数字进入账本
+                ledger.unknowns.append(f"{u.locator.label()}：疑似指令性语句，未作为事实（{s[:30]}）")
+                continue
             nums = extract_numbers(s)
             prog = progress_of(s)
             status, tags, ver = self._status_for(mat, prog)
@@ -359,22 +384,40 @@ class FactLedgerSkill(Skill):
                         )
 
     def _conflicts(self, sc: SkillContext, ledger: FactLedger) -> None:
-        groups: dict[tuple[str, str], list[Fact]] = defaultdict(list)
-        for f in ledger.facts:
-            if isinstance(f.value, (int, float)) and f.kind != "plain" and "computed" not in f.tags and "example" not in f.tags:
-                groups[(f.attribute, f.kind)].append(f)
-        for (attr, kind), fs in groups.items():
+        candidates = [f for f in ledger.facts if isinstance(f.value, (int, float)) and f.kind != "plain" and "computed" not in f.tags and "example" not in f.tags]
+        # 属性归并：“示范点”与“基层医疗示范点”指同一对象（短名是长名的后缀，且单位相同）
+        attrs = sorted({f.attribute for f in candidates if f.attribute}, key=len)
+        canon: dict[str, str] = {}
+        for a in attrs:
+            canon[a] = next((b for b in attrs if len(b) >= 2 and len(b) < len(a) and a.endswith(b) and canon.get(b) == b), a)
+        groups: dict[tuple[str, str, str], list[Fact]] = defaultdict(list)
+        for f in candidates:
+            groups[(canon.get(f.attribute, f.attribute), f.kind, f.unit)].append(f)
+        for (attr, kind, _unit), fs in groups.items():
             mats = {f.sources[0].material_id for f in fs if f.sources}
             if len(mats) < 2:
                 continue
             by_scope: dict[tuple[str, str], list[Fact]] = defaultdict(list)
+            unscoped = [f for f in fs if not f.caliber and not f.as_of]
             for f in fs:
-                by_scope[(f.caliber, f.as_of)].append(f)
-            for scope, items in by_scope.items():
-                values = {round(float(f.value) * (MONEY_UNITS.get(f.unit, 1.0) if f.kind == "money" else 1.0), 6) for f in items}
-                if len(values) > 1 and len({f.sources[0].material_id for f in items}) > 1:
-                    if any(f.status == FactStatus.PROPOSED for f in items) and any(f.status != FactStatus.PROPOSED for f in items):
-                        continue  # 拟议值与现状值不同属正常，不是冲突
+                if f.caliber or f.as_of:
+                    by_scope[(f.caliber, f.as_of)].append(f)
+            if by_scope:
+                for key in by_scope:  # 未注明口径与时点的数据无法排除冲突：与每个口径都比较
+                    by_scope[key] += unscoped
+            else:
+                by_scope[("", "")] = unscoped
+            seen_sets: set[frozenset[str]] = set()
+            for scoped in by_scope.values():
+                # 拟议值与现状值不同属正常：分别在“拟议”与“现状”两类内部比较
+                proposed = [f for f in scoped if f.status == FactStatus.PROPOSED]
+                actual = [f for f in scoped if f.status != FactStatus.PROPOSED]
+                for items in (proposed, actual):
+                    values = {round(float(f.value) * (MONEY_UNITS.get(f.unit, 1.0) if f.kind == "money" else 1.0), 6) for f in items}
+                    key = frozenset(f.fact_id for f in items)
+                    if len(values) < 2 or len({f.sources[0].material_id for f in items}) < 2 or key in seen_sets:
+                        continue
+                    seen_sets.add(key)
                     for f in items:
                         if f.status != FactStatus.VERIFIED:
                             f.status = FactStatus.CONFLICT
@@ -386,7 +429,7 @@ class FactLedgerSkill(Skill):
                             description="；".join(f"{f.sources[0].label()}：{f.display_value()}" for f in items),
                         )
                     )
-            if len(by_scope) > 1:
+            if len([k for k in by_scope if k != ("", "")]) > 1:
                 ledger.calc_checks.append(
                     CalcCheck(
                         check_id=sc.ids.next("K"),

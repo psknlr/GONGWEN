@@ -267,3 +267,29 @@ def test_render_check_with_libreoffice(tmp_path):
     assert byid["LAY-FIRSTPAGE"].status == "pass"
     assert byid["LAY-PAGENO"].status == "pass"
     assert byid["DOCX-MARGIN-TOP"].status == "pass"
+
+
+def test_matter_siblings_follow_fact_change_and_keep_own_materials(tmp_path):
+    """同一事项的请示与函共享事项账本：一处经费变更，另一份文稿联动更新并退回审校（设计 §6.3）。"""
+    eng = make_engine(tmp_path)
+    user = default_user()
+    st1 = start(eng, user)
+    st1 = run_to_review(eng, user, st1.task_id)
+    st2 = eng.create_task("给示例市财政局发函，商请支持基层医疗示范点建设经费", by=user, matter_id=st1.matter_id, hints={"recipients": "示例市财政局", "issuer_type": "政府部门"})
+    eng.add_material(st2.task_id, "经费测算表.xlsx", make_xlsx(BUDGET, sheet="经费测算"), by=user, declared=Clearance.PUBLIC)
+    mats = eng.rt.materials.list(st1.matter_id)
+    assert len({m.material_id for m in mats}) == 3  # 事项内编号不重复，第二个任务没有覆盖第一个任务的材料
+    st2 = eng.advance(st2.task_id, by=user, auto_accept={"task_confirm", "outline_confirm", "review_escalation"})
+    assert st2.stage == Stage.HUMAN_REVIEW
+    ir2 = eng.current_ir(st2)
+    assert "120万元" in ir2.full_text()
+    ledger = eng.load_matter_ledger(st1)
+    equip = next(f for f in ledger.facts if f.attribute.startswith("设备购置"))
+    eng.request_revision(st1.task_id, by=user, fact_changes=[{"fact_id": equip.fact_id, "new_value": 40, "reason": "核减"}])
+    st2 = eng.load_state(st2.task_id)
+    assert st2.stage == Stage.REVIEW and any("同一事项" in e for e in st2.errors)
+    ir2 = eng.current_ir(st2)
+    assert "100万元" in ir2.full_text() and "120万元" not in ir2.full_text()
+    assert not st2.pending_checkpoints()  # 原人工送审节点作废，须重新审校后再送审
+    st2 = eng.advance(st2.task_id, by=user, auto_accept={"review_escalation"})
+    assert st2.stage == Stage.HUMAN_REVIEW

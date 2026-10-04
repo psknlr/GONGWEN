@@ -130,6 +130,8 @@ class Locator(GWModel):
     excerpt: str = ""
 
     def label(self) -> str:
+        if self.material_id == "request":
+            return "办文需求"
         return f"{self.material_id}#{self.path}"
 
 

@@ -159,7 +159,8 @@ class OutlinePlanningSkill(Skill):
             elif role in ("requirements", "evaluation"):
                 pick = [f for f in usable if DATE_RE.search(f.statement) or "报送" in f.statement or "联系人" in f.statement][:4]
             if role == "matter":
-                pick = (done_or_ongoing + planned)[:6]
+                # 函：必要背景 + 商洽事项；涉及经费时写明测算合计（明细见附件）
+                pick = (done_or_ongoing + planned)[:6] + [f for f in computed if f.kind == "money"][:1]
             core_parts = list(dict.fromkeys(f.statement for f in pick))[:2] + [m.text for m in plan.measures if m.measure_id in measure_ids][:2]
             para = ParagraphPlan(
                 para_id=sc.ids.next("PP"),
@@ -198,7 +199,8 @@ class OutlinePlanningSkill(Skill):
             plan.attachments = []
             sc.note("skill.style_reference", {"case_id": style[0]["case_id"], "usage": style[0]["usage"]})
         if any(f.kind == "money" for f in computed) and doc_kind in ("请示", "函", "工作方案"):
-            plan.attachments.append(f"{subject}经费测算表" if "经费" not in subject else f"{subject.replace('申请', '')}测算表")
+            core = re.sub(r"^(拟申请|申请|商请|请求|恳请|请)(支持|协助|安排|解决|给予)?", "", subject) or subject
+            plan.attachments.append(f"{core}经费测算表" if "经费" not in core else f"{core}测算表")
         sc.note("skill.outline", {"sections": len(plan.sections), "measures": len(plan.measures), "missing": plan.contract_missing, "questions": len(plan.open_questions)})
         return plan
 
