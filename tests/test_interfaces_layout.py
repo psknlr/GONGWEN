@@ -341,3 +341,13 @@ def test_check_fix_applies_only_mechanical_changes(tmp_path, capsys):
     assert "GW-GENRE-006" in rules_left and not rules_left & {"GW-NUM-006", "GW-NUM-007", "GW-PUNC-001", "GW-FMT-002", "GW-FMT-009"}
     assert {c["rule"] for c in d["changes"]} >= {"GW-NUM-006", "GW-NUM-007", "GW-PUNC-001", "GW-FMT-002", "GW-FMT-003", "GW-FMT-009"}
     assert rc in (0, 1)
+
+
+def test_exec_accept_can_be_repeated_or_comma_separated(tmp_path, capsys):
+    """--accept 重复给出时全部生效（此前只保留最后一个，任务停在任务契约确认）。"""
+    from gongwen.cli.main import _accept_set
+
+    assert _accept_set(["task_confirm", "outline_confirm"]) == {"task_confirm", "outline_confirm"}
+    assert _accept_set("task_confirm,outline_confirm") == {"task_confirm", "outline_confirm"}
+    with pytest.raises(ValueError):
+        _accept_set(["task_confirm", "human_review"])

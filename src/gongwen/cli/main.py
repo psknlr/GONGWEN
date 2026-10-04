@@ -284,10 +284,12 @@ def cmd_task_add(args) -> int:
     return EXIT_BLOCKED if res.decision.value == "禁止进入当前环境" else EXIT_OK
 
 
-def _accept_set(value: str | None) -> set[str]:
+def _accept_set(value: str | list[str] | None) -> set[str]:
     from ..orchestrator.checkpoints import AUTO_ACCEPT_KEYS
 
-    keys = {x.strip() for x in (value or "").split(",") if x.strip()}
+    # 既可逗号分隔，也可重复给出（--accept task_confirm --accept outline_confirm）
+    values = value if isinstance(value, list) else [value or ""]
+    keys = {x.strip() for v in values for x in (v or "").split(",") if x.strip()}
     bad = keys - set(AUTO_ACCEPT_KEYS)
     if bad:
         raise ValueError(f"--accept 只能是：{'、'.join(AUTO_ACCEPT_KEYS)}（材料准入、权限确认、人工送审永远需要人工处理）；无效：{'、'.join(sorted(bad))}")
@@ -812,7 +814,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_task_add)
     p = t.add_parser("advance", help="推进到下一个人工审核节点")
     p.add_argument("task_id")
-    p.add_argument("--accept", help="自动接受的节点：task_confirm,outline_confirm,conflict,review_escalation")
+    p.add_argument("--accept", action="append", help="自动接受的节点：task_confirm,outline_confirm,conflict,review_escalation（逗号分隔或重复给出）")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_task_advance)
     p = t.add_parser("status", help="任务状态")
@@ -879,7 +881,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--issuer")
     p.add_argument("--genre")
     p.add_argument("--matter")
-    p.add_argument("--accept", help="自动接受：task_confirm,outline_confirm,conflict,review_escalation")
+    p.add_argument("--accept", action="append", help="自动接受：task_confirm,outline_confirm,conflict,review_escalation（逗号分隔或重复给出）")
     p.add_argument("--json", action="store_true", help="以 NDJSON 输出事件流与最终结果")
     p.set_defaults(func=cmd_exec)
 
