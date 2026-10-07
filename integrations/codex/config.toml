@@ -1,0 +1,22 @@
+# Codex 接入公文智能体（MCP，stdio）
+# 位置：~/.codex/config.toml，或受信任项目内的 .codex/config.toml
+# 等价命令：codex mcp add gongwen --env GONGWEN_ROUTE=public_dev -- gongwen -C /path/to/workspace mcp
+
+[mcp_servers.gongwen]
+command = "gongwen"
+args = ["-C", "/path/to/workspace", "mcp"]   # 工作区：材料、任务数据与 GONGWEN.md 所在目录
+# 只转发确需的环境变量（例如工作区配置里的起草模型要用的密钥）
+env_vars = ["DEEPSEEK_API_KEY"]
+startup_timeout_sec = 20
+tool_timeout_sec = 300        # task_advance 会走完整条确定性流水线并做渲染核验
+enabled = true
+# 可按需收窄：只开放检查与检索类工具
+# enabled_tools = ["text_check", "policy_search", "genre_guide"]
+
+# 说明：
+# 1. 审核节点、审批导入、材料准入确认、采纳修改建议不在 MCP 工具中，Codex 无法代办；
+#    工具结果里的 human_actions 会提示用户在终端运行 gongwen task confirm …。
+# 2. 工具结果会进入 Codex 自己配置的模型。gongwen 默认只经 MCP 返回“公开”材料形成的内容
+#    （[mcp] max_clearance），内部材料任务请在本机终端或 gongwen serve 工作台中办理。
+# 3. 技能说明：在项目根目录运行 gongwen skills install --dest .agents/skills，Codex 会从
+#    $REPO_ROOT/.agents/skills 发现这 12 项技能（按需加载 SKILL.md）。

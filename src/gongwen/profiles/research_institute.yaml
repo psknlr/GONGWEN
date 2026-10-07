@@ -1,0 +1,24 @@
+# 科研机构：参照执行《党政机关公文处理工作条例》，以本单位公文处理办法为准。
+name: research_institute
+title: 科研机构
+subject_types: [科研机构, 事业单位]
+tiaoli_mode: 参照
+allowed_genres: [决定, 意见, 通知, 通报, 报告, 请示, 批复, 函, 纪要]
+format_profile: gbt9704-2012
+office_name: 综合办公室
+principal_title: 所长（院长）、党委书记等单位主要负责人
+upper_name: 主管部门
+lower_name: 研究室、课题组和职能部门
+internal_unit_name: 研究室、课题组等内设机构
+internal_unit_rule: 内设机构不得以自身名义对外制发正式公文（以本单位制度为准）
+review_chain: [部门拟稿, 部门负责人审核, 综合办公室审核, 单位领导签发]
+unit_procedures:
+  - code: UNIT_COLLECTIVE
+    name: 按本单位制度确认是否须经所务会或党委会审议
+    trigger_keywords: [重大, 经费, 采购, 人事, 平台建设]
+  - code: UNIT_RESEARCH_INTEGRITY
+    name: 涉及科研项目经费、成果时，按本单位科研管理制度核对
+    trigger_keywords: [课题, 项目经费, 科研成果, 结题]
+self_reference_patterns: ["我所", "我院"]
+notes: 课题申报书等专门材料须同时满足项目主管部门的申报指南要求。
+organs: []

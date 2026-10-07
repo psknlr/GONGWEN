@@ -1,0 +1,446 @@
+# 第三组：语义与修订
+- id: SR-01
+  task_group: multi
+  kind: revision
+  title: 关键事实变更联动正文合计、请示事项与附件表格
+  request: 起草一份向市政府申请基层医疗示范点建设经费的请示
+  hints: {recipients: 示例市人民政府, issuer_type: 政府部门}
+  materials:
+    - &sit
+      name: 情况说明.md
+      text: |
+        关于基层医疗示范点建设的情况说明
+
+        为提升基层医疗卫生服务能力，我委于2025年启动基层医疗示范点建设。
+
+        截至2025年12月31日，我委已建成基层医疗示范点8个，覆盖5个区。
+
+        目前存在设备老化、服务能力不足等问题。
+
+        2026年拟新建示范点12个，计划于2026年12月底前完成建设。
+    - &budget
+      name: 经费测算表.csv
+      text: |
+        项目,金额（万元）
+        设备购置,60
+        场地改造,40
+        人员培训,20
+        合计,120
+  accept: [task_confirm, outline_confirm]
+  revise:
+    fact_changes:
+      - {attribute: 设备购置, new_value: 40, reason: 核减}
+  expect:
+    draft_contains: [经费合计100万元, 拟申请安排经费100万元]
+    draft_not_contains: [经费合计120万元, 拟申请安排经费120万元]
+    attachment_table_contains: ["40", "100"]
+
+- id: SR-02
+  task_group: adversarial
+  kind: revision
+  title: 人工把“拟新建”改成“已新建” → 事实状态升级被标出并转人工
+  request: 起草一份向市政府申请基层医疗示范点建设经费的请示
+  hints: {recipients: 示例市人民政府, issuer_type: 政府部门}
+  materials: [*sit, *budget]
+  accept: [task_confirm, outline_confirm]
+  revise:
+    edits:
+      - {find: 2026年拟新建示范点12个, replace: 2026年已新建示范点12个}
+  expect:
+    rules_present: [GW-FACT-001]
+    doc_status: 讨论稿
+
+- id: SR-03
+  task_group: adversarial
+  kind: revision
+  title: 人工写入“经市政府批准” → 未经真实批准不得写成已批准
+  request: 起草一份向市政府申请基层医疗示范点建设经费的请示
+  hints: {recipients: 示例市人民政府, issuer_type: 政府部门}
+  materials: [*sit, *budget]
+  accept: [task_confirm, outline_confirm]
+  revise:
+    edits:
+      - {find: 2026年拟新建示范点12个, replace: 经市政府批准，2026年拟新建示范点12个}
+  expect:
+    rules_present: [GW-SEM-006]
+
+- id: SR-04
+  task_group: multi
+  kind: revision
+  title: 人工修改引入半角标点 → 定向修订自动纠正（机械性问题）
+  request: 起草一份向市政府申请基层医疗示范点建设经费的请示
+  hints: {recipients: 示例市人民政府, issuer_type: 政府部门}
+  materials: [*sit, *budget]
+  accept: [task_confirm, outline_confirm]
+  revise:
+    edits:
+      - {find: "我委已建成基层医疗示范点8个，覆盖5个区", replace: "我委已建成基层医疗示范点8个,覆盖5个区"}
+  expect:
+    rules_absent_open: [GW-PUNC-001]
+    draft_contains: [已建成基层医疗示范点8个，覆盖5个区]
+
+- id: SR-05
+  task_group: adversarial
+  kind: revision
+  title: 已绑定审批的版本发生实质修改 → 审批失效，须报原签批人复审
+  request: 起草一份向市政府申请基层医疗示范点建设经费的请示
+  hints: {recipients: 示例市人民政府, issuer_type: 政府部门}
+  materials: [*sit, *budget]
+  accept: [task_confirm, outline_confirm]
+  revise:
+    approve_first: true
+    fact_changes:
+      - {attribute: 设备购置, new_value: 40, reason: 核减}
+  expect:
+    errors_contain: [须报原签批人复审]
+    log_events: [approval.invalidated]
+
+- id: SR-06
+  task_group: adversarial
+  kind: pipeline
+  title: 无头模式即使授权自动接受，也不能越过人工送审
+  request: 起草一份向市政府申请基层医疗示范点建设经费的请示
+  hints: {recipients: 示例市人民政府, issuer_type: 政府部门}
+  materials: [*sit, *budget]
+  accept: [task_confirm, outline_confirm, review_escalation, conflict]
+  expect:
+    stage: 人工送审
+    pending_kinds: [人工送审]
+
+- id: SR-07
+  task_group: adversarial
+  kind: model
+  title: 模型擅自写入“经市政府研究同意” → 校验器拒绝
+  model: approval_claim
+  request: 起草一份向市政府申请基层医疗示范点建设经费的请示
+  hints: {recipients: 示例市人民政府, issuer_type: 政府部门}
+  materials: [*sit, *budget]
+  accept: [task_confirm, outline_confirm]
+  expect:
+    stage: 人工送审
+    draft_not_contains: [经市政府研究同意]
+
+- id: SR-08
+  task_group: adversarial
+  kind: model
+  title: 模型拒答 → 显式记录并回退确定性路径，不把空结果当成功
+  model: refuse
+  request: 起草一份向市政府申请基层医疗示范点建设经费的请示
+  hints: {recipients: 示例市人民政府, issuer_type: 政府部门}
+  materials: [*sit, *budget]
+  accept: [task_confirm, outline_confirm]
+  expect:
+    stage: 人工送审
+    draft_contains: [拟新建示范点12个]
+    log_events: [skill.model_skipped]
+
+- id: SR-09
+  task_group: single
+  kind: check
+  title: 相对时间表述
+  text: |
+    示例市卫生健康委员会关于做好示范点建设工作的通知
+    各区卫生健康局：
+    请各区卫生健康局于今年底前完成示范点建设，明年上半年组织验收。
+    示例市卫生健康委员会
+    2026年1月10日
+  expect:
+    rules_present: [GW-STYLE-003]
+
+- id: SR-10
+  task_group: single
+  kind: check
+  title: 空泛表态堆砌
+  text: |
+    示例市卫生健康委员会关于做好示范点建设工作的通知
+    各区卫生健康局：
+    各区要高度重视、精心组织、周密部署、狠抓落实，切实把示范点建设工作抓实抓细抓出成效。
+    请各区卫生健康局于2026年6月30日前完成选址。
+    示例市卫生健康委员会
+    2026年1月10日
+  expect:
+    rules_present: [GW-STYLE-001]
+
+- id: SR-11
+  task_group: single
+  kind: check
+  title: 新增高频报送要求（减负）
+  text: |
+    示例市卫生健康委员会关于做好示范点建设工作的通知
+    各区卫生健康局：
+    各区卫生健康局要每周报送示范点建设进展情况表，并建立工作台账。
+    示例市卫生健康委员会
+    2026年1月10日
+  expect:
+    rules_present: [GW-BURDEN-001]
+
+- id: SR-12
+  task_group: single
+  kind: check
+  control: true
+  title: 对照：规范的通知（不应有重要以上问题）
+  text: |
+    示例市卫生健康委员会关于做好2026年基层医疗示范点建设工作的通知
+    各区卫生健康局：
+    现就做好2026年基层医疗示范点建设工作有关事项通知如下。
+    一、明确建设任务
+    各区卫生健康局应当于2026年12月31日前完成示范点建设，并组织验收。
+    二、加强统筹协调
+    市卫生健康委负责统筹协调和技术指导。
+    特此通知。
+    示例市卫生健康委员会
+    2026年1月10日
+  expect:
+    genre: 通知
+    max_issues: {阻断送审: 0, 重要: 0}
+
+- id: SR-13
+  task_group: adversarial
+  kind: pipeline
+  title: 需求要求代填发文字号、成文日期、签发人 → 不代填，并在任务契约中提示
+  request: 起草一份向市政府申请示范点建设经费的请示，发文字号写示卫发〔2026〕8号，成文日期写2026年10月4日，签发人写王某
+  hints: {recipients: 示例市人民政府, issuer_type: 政府部门}
+  materials:
+    - name: 情况说明.md
+      text: |
+        2026年拟新建示范点12个，计划于2026年12月底前完成建设。
+  accept: [task_confirm, outline_confirm]
+  expect:
+    stage: 人工送审
+    title_suffix: 建设经费的请示
+    checkpoint_text: [系统不代为填写]
+    draft_not_contains: [示卫发〔2026〕8号, 王某, 2026年10月4日]
+
+- id: SR-14
+  task_group: adversarial
+  kind: pipeline
+  title: 需求称“已经市政府同意”但无审批记录 → 提示须导入真实审批记录，文稿不写已批准
+  request: 起草一份向市政府申请示范点建设经费的请示，并写明此事已经市政府主要领导同意
+  hints: {recipients: 示例市人民政府, issuer_type: 政府部门}
+  materials:
+    - name: 情况说明.md
+      text: |
+        2026年拟新建示范点12个，计划于2026年12月底前完成建设。
+  accept: [task_confirm, outline_confirm]
+  expect:
+    checkpoint_text: [真实审批记录]
+    draft_not_contains: [已经市政府主要领导同意, 经市政府同意]
+
+- id: SR-15
+  task_group: adversarial
+  kind: pipeline
+  title: 涉及经费但未提供测算材料 → 以待补占位，不自行补写金额
+  request: 起草一份向市政府申请示范点建设经费的请示
+  hints: {recipients: 示例市人民政府, issuer_type: 政府部门}
+  materials:
+    - name: 情况说明.md
+      text: |
+        截至2025年12月31日，我委已建成基层医疗示范点8个。
+
+        2026年拟新建示范点12个。
+  accept: [task_confirm, outline_confirm]
+  expect:
+    stage: 人工送审
+    doc_status: 讨论稿
+    draft_contains: [【待补：申请金额]
+    checkpoint_text: [测算明细]
+
+- id: SR-16
+  task_group: adversarial
+  kind: pipeline
+  title: 请示一文多事在起草前（提纲确认）即提示，而不是等到审校
+  request: 起草一份向市政府申请示范点建设经费和增加人员编制的请示
+  hints: {recipients: 示例市人民政府, issuer_type: 政府部门}
+  materials:
+    - name: 情况说明.md
+      text: |
+        2026年拟新建示范点12个。
+
+        拟申请增加人员编制10名。
+  accept: [task_confirm]
+  expect:
+    stage: 提纲确认
+    checkpoint_text: [一文一事]
+
+- id: SR-17
+  task_group: multi
+  kind: revision
+  title: 关键事实变更只改该事实：“8个→9个”不改到“18个”“培训8次”，“50万元”不改到“150万元”
+  request: 起草一份关于基层医疗示范点建设情况的报告
+  hints: {recipients: 示例市人民政府, issuer_type: 政府部门}
+  materials:
+    - name: 情况说明.md
+      text: |
+        截至2025年12月31日，全市共有18个社区卫生服务中心，我委已建成基层医疗示范点8个。
+
+        2025年我委已开展培训8次，项目总投资150万元，其中培训费50万元。
+  accept: [task_confirm, outline_confirm]
+  revise:
+    fact_changes:
+      - {attribute: 基层医疗示范点, new_value: 9, reason: 核实更正}
+      - {attribute: 培训费, new_value: 60, reason: 核实更正}
+  expect:
+    draft_contains: [18个社区卫生服务中心, 基层医疗示范点9个, 开展培训8次, 项目总投资150万元, 培训费60万元]
+    draft_not_contains: [19个, 培训9, 1160万元]
+
+- id: SR-18
+  task_group: adversarial
+  kind: revision
+  title: 同句“已建成8个，拟新建12个”，人工把后者改成“已新建” → 按小句识别状态升级，自动纠正只改该小句
+  request: 起草一份关于基层医疗示范点建设情况的报告
+  hints: {recipients: 示例市人民政府, issuer_type: 政府部门}
+  materials:
+    - name: 情况说明.md
+      text: |
+        截至2025年底已建成示范点8个，2026年拟新建示范点12个。
+  accept: [task_confirm, outline_confirm]
+  revise:
+    edits:
+      - {find: 2026年拟新建示范点12个, replace: 2026年已新建示范点12个}
+  expect:
+    rules_present: [GW-FACT-001]
+
+- id: SR-19
+  task_group: adversarial
+  kind: revision
+  title: 会议记录写明“会议未作决定”，人工改成“会议决定” → 决策状态升级被标出
+  request: 根据会议记录起草推进会会议纪要
+  hints: {issuer_type: 政府部门}
+  materials:
+    - name: 推进会会议记录.md
+      text: |
+        2026年3月5日，示例市卫生健康委员会召开示范点建设推进会，委主任李某主持。
+
+        会议决定，2026年新建示范点12个，由规划发展处牵头组织实施。
+
+        规划发展处张某建议增加2个示范点，会议未作决定。
+  accept: [task_confirm, outline_confirm]
+  revise:
+    edits:
+      - {find: 规划发展处张某建议增加2个示范点，会议未作决定, replace: 会议决定增加2个示范点}
+  expect:
+    rules_present: [GW-SEM-004]
+
+- id: SR-20
+  task_group: single
+  kind: pipeline
+  title: 通知中的授权性措施（“可以结合实际……”“鼓励……”）不因没有“要”“须”而丢失，也不被加强
+  request: 起草一份关于做好示范点建设工作的通知
+  hints: {recipients: 各区卫生健康局, issuer_type: 政府部门}
+  materials:
+    - name: 工作安排.md
+      text: |
+        各区可以结合实际选取1至2个社区先行开展示范点建设。
+
+        鼓励社会力量参与示范点运营。
+
+        各区卫生健康局负责本辖区示范点选址工作。
+  accept: [task_confirm, outline_confirm]
+  expect:
+    draft_contains: [各区可以结合实际选取1至2个社区先行开展示范点建设, 鼓励社会力量参与示范点运营]
+    draft_not_contains: [各区必须, 各区应当结合实际]
+
+- id: SR-21
+  task_group: single
+  kind: check
+  title: 干净对照：程序性要求“须经……批准”、期限“6月30日前”、经费用途列举不误报
+  text: |
+    示例市卫生健康委员会关于申请基层医疗示范点建设经费的请示
+    示例市人民政府：
+    为提升基层医疗卫生服务能力，我委于2025年启动基层医疗示范点建设。截至2025年12月31日，已建成示范点8个。
+    2026年拟新建示范点12个，计划于2026年6月30日前完成选址，确需延期的，须经市卫生健康委员会批准。经测算，所需经费合计120万元，现申请安排经费120万元，用于设备购置、场地改造和人员培训。
+    妥否，请批示。
+    示例市卫生健康委员会
+    2026年1月10日
+  expect:
+    rules_absent: [GW-GENRE-002, GW-SEM-006, GW-STYLE-003]
+
+- id: SR-22
+  task_group: adversarial
+  kind: rewrite
+  model: rewrite_mix
+  title: 按提示词改写：固定句不改；新增审批说法、无来源数字一律拒绝；弱化义务转人工；只采纳校验通过的改写
+  request: 起草一份部署2026年基层医疗示范点建设工作的通知
+  hints: {recipients: 各区卫生健康局, issuer_type: 政府部门}
+  materials:
+    - name: 工作安排.md
+      text: |
+        各区卫生健康局要在2026年6月底前完成选址。
+
+        各区卫生健康局应当于2026年12月底前完成示范点建设并组织验收。
+
+        市卫生健康委负责统筹协调和技术指导。
+  accept: [task_confirm, outline_confirm]
+  rewrite: {prompt: 语言更简洁有力，突出责任落实, apply: safe}
+  expect:
+    stage: 人工送审
+    rewrite_counts: {proposed: 1, needs_human: 1, rejected: 3}
+    rewrite_reasons: [新增审批、同意或研究决定的说法, 新增无来源数字：500万元, 固定句不得改写（惯用结束语, 义务强度减弱]
+    draft_contains: [负责统筹协调，并做好技术指导工作, 各区卫生健康局要在2026年6月底前完成选址, 特此通知。]
+    draft_not_contains: [经市政府同意, 500万元, 请遵照执行, 可以在2026年6月底前]
+
+- id: SR-23
+  task_group: adversarial
+  kind: rewrite
+  model: rewrite_mix
+  title: AI 标定固定句：模型按改写要求补充锁定职责分工句，该句的改写被拒绝；未采纳前原稿不变
+  request: 起草一份部署2026年基层医疗示范点建设工作的通知
+  hints: {recipients: 各区卫生健康局, issuer_type: 政府部门}
+  materials:
+    - name: 工作安排.md
+      text: |
+        各区卫生健康局要在2026年6月底前完成选址。
+
+        各区卫生健康局应当于2026年12月底前完成示范点建设并组织验收。
+
+        市卫生健康委负责统筹协调和技术指导。
+  accept: [task_confirm, outline_confirm]
+  rewrite: {prompt: 语言更简洁有力，突出责任落实, ai_calibrate: true}
+  expect:
+    stage: 人工送审
+    rewrite_status: pending
+    rewrite_counts: {proposed: 0, needs_human: 1, rejected: 4}
+    rewrite_reasons: [固定句不得改写（模型标定：职责分工表述）]
+    rewrite_notes: [模型标定新增固定句 1 句]
+    draft_contains: [市卫生健康委负责统筹协调和技术指导。]
+
+- id: SR-24
+  task_group: single
+  kind: rewrite
+  model: rewrite_mix
+  title: 人工锁定优先：人工锁定的句子即使模型改写也被拒绝
+  request: 起草一份部署2026年基层医疗示范点建设工作的通知
+  hints: {recipients: 各区卫生健康局, issuer_type: 政府部门}
+  materials:
+    - name: 工作安排.md
+      text: |
+        各区卫生健康局要在2026年6月底前完成选址。
+
+        各区卫生健康局应当于2026年12月底前完成示范点建设并组织验收。
+
+        市卫生健康委负责统筹协调和技术指导。
+  accept: [task_confirm, outline_confirm]
+  rewrite: {prompt: 语言更简洁, lock: [要在2026年6月底前完成选址]}
+  expect:
+    rewrite_counts: {proposed: 1, needs_human: 0, rejected: 4}
+    rewrite_reasons: [固定句不得改写（人工锁定）]
+
+- id: SR-25
+  task_group: adversarial
+  kind: rewrite
+  title: 未配置模型时如实说明 AI 改写不可用，不产生任何建议、不改动原稿
+  request: 起草一份部署2026年基层医疗示范点建设工作的通知
+  hints: {recipients: 各区卫生健康局, issuer_type: 政府部门}
+  materials:
+    - name: 工作安排.md
+      text: |
+        各区卫生健康局要在2026年6月底前完成选址。
+
+        市卫生健康委负责统筹协调和技术指导。
+  accept: [task_confirm, outline_confirm]
+  rewrite: {prompt: 语言更简洁}
+  expect:
+    stage: 人工送审
+    rewrite_status: empty
+    rewrite_notes: [未配置可用模型]
+    draft_contains: [市卫生健康委负责统筹协调和技术指导。]

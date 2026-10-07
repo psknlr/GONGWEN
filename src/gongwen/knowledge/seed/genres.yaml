@@ -1,0 +1,289 @@
+# 文种知识：定义原文取自《党政机关公文处理工作条例》第八条（见 tiaoli_2012.json，已多源逐字核对）；
+# 结构、结束语、风险等为实务归纳（level: 实务），不得表述为“条例规定”。
+# contract：文种“内容契约”（设计 §2.2），required=false 表示条件性要素（如“确有需要时列明”）。
+
+statutory:
+  决议:
+    article: 第八条（一）
+    definition: 适用于会议讨论通过的重大决策事项。
+    directions: [下行文, 公布性, 会议文书]
+    subjects: [党的机关, 人大]
+    format: general
+    closings: {preferred: [], acceptable: [本决议自通过之日起执行。]}
+    contract:
+      - {key: meeting, name: 会议名称与通过情况, required: true}
+      - {key: decisions, name: 决策事项, required: true}
+      - {key: requirements, name: 执行要求, required: false}
+    risks: [把未经会议表决的领导决定写成决议]
+  决定:
+    article: 第八条（二）
+    definition: 适用于对重要事项作出决策和部署、奖惩有关单位和人员、变更或者撤销下级机关不适当的决定事项。
+    directions: [下行文]
+    subjects: [通用]
+    format: general
+    closings: {preferred: [], acceptable: [本决定自印发之日起施行。]}
+    contract:
+      - {key: basis, name: 依据与缘由, required: true}
+      - {key: decisions, name: 决定事项, required: true}
+      - {key: requirements, name: 执行要求, required: false}
+    risks: [用于日常事务部署（应用通知）]
+  命令（令）:
+    article: 第八条（三）
+    definition: 适用于公布行政法规和规章、宣布施行重大强制性措施、批准授予和晋升衔级、嘉奖有关单位和人员。
+    directions: [下行文, 公布性]
+    subjects: [行政机关]
+    format: command
+    closings: {preferred: [], acceptable: [本令自公布之日起施行。, 本令自发布之日起施行。]}
+    contract:
+      - {key: matter, name: 公布或宣布事项, required: true}
+      - {key: effective, name: 施行日期, required: true}
+    risks: [党的机关或无令权机关使用]
+  公报:
+    article: 第八条（四）
+    definition: 适用于公布重要决定或者重大事项。
+    directions: [公布性]
+    subjects: [党的机关, 通用]
+    format: general
+    closings: {preferred: [], acceptable: []}
+    contract:
+      - {key: overview, name: 会议或事项概况, required: true}
+      - {key: content, name: 主要内容, required: true}
+    risks: [与纪要混用]
+  公告:
+    article: 第八条（五）
+    definition: 适用于向国内外宣布重要事项或者法定事项。
+    directions: [公布性]
+    subjects: [通用]
+    format: general
+    closings: {preferred: [特此公告。], acceptable: []}
+    contract:
+      - {key: matter, name: 公告事项, required: true}
+      - {key: basis, name: 依据, required: false}
+      - {key: effective, name: 生效时间, required: false}
+    risks: [用于本地区一般管理事项（应用通告）]
+  通告:
+    article: 第八条（六）
+    definition: 适用于在一定范围内公布应当遵守或者周知的事项。
+    directions: [公布性]
+    subjects: [通用]
+    format: general
+    closings: {preferred: [特此通告。], acceptable: []}
+    contract:
+      - {key: basis, name: 依据, required: true}
+      - {key: items, name: 应遵守或周知事项, required: true}
+      - {key: effective, name: 执行时间与责任, required: false}
+    risks: [向国内外宣布法定事项时误用]
+  意见:
+    article: 第八条（七）
+    definition: 适用于对重要问题提出见解和处理办法。
+    directions: [上行文, 下行文, 平行文]
+    subjects: [通用]
+    format: general
+    closings:
+      preferred: []
+      by_direction:
+        下行文: [以上意见，请结合实际认真贯彻执行。]
+        上行文: [以上意见，如无不妥，请批转有关部门执行。, 以上意见，供参考。]
+        平行文: [以上意见，供参考。]
+    contract:
+      - {key: background, name: 背景与依据, required: true}
+      - {key: opinions, name: 意见与处理办法, required: true}
+      - {key: requirements, name: 落实要求, required: false}
+    risks: [对必须强制执行的事项用意见]
+  通知:
+    article: 第八条（八）
+    definition: 适用于发布、传达要求下级机关执行和有关单位周知或者执行的事项，批转、转发公文。
+    directions: [下行文, 平行文]
+    subjects: [通用]
+    format: general
+    closings: {preferred: [特此通知。], acceptable: []}
+    contract:
+      - {key: reason, name: 通知事由, required: true, functions: [依据, 背景]}
+      - {key: scope, name: 适用对象, required: true}
+      - {key: items, name: 通知事项, required: true, functions: [措施]}
+      - {key: requirements, name: 执行要求, required: true, functions: [要求]}
+      - {key: deadline, name: 时限和反馈方式, required: false, condition: 确有需要时列明}
+    risks: [擅自增加基层报表、责任或考核要求]
+    variants: [发布类, 批转转发类, 印发类, 事务类, 会议通知]
+  通报:
+    article: 第八条（九）
+    definition: 适用于表彰先进、批评错误、传达重要精神和告知重要情况。
+    directions: [下行文]
+    subjects: [通用]
+    format: general
+    closings: {preferred: [特此通报。], acceptable: []}
+    contract:
+      - {key: facts, name: 事实经过, required: true}
+      - {key: evaluation, name: 性质评价或决定, required: true}
+      - {key: requirements, name: 要求, required: false}
+    risks: [批评性通报未核实事实]
+  报告:
+    article: 第八条（十）
+    definition: 适用于向上级机关汇报工作、反映情况，回复上级机关的询问。
+    directions: [上行文]
+    subjects: [通用]
+    format: general
+    closings: {preferred: [特此报告。], acceptable: [以上报告，请审阅。]}
+    forbidden_phrases: [请批示, 请批复, 请予批准, 请审批, 妥否, 当否, 请予审批, 请予批复]
+    contract:
+      - {key: work, name: 已开展工作, required: true, functions: [事实]}
+      - {key: situation, name: 客观情况, required: true, functions: [事实]}
+      - {key: problems, name: 问题及分析, required: false, functions: [分析]}
+      - {key: plans, name: 相关安排, required: false, functions: [措施]}
+    risks: [将需要上级批准的事项夹带其中]
+  请示:
+    article: 第八条（十一）
+    definition: 适用于向上级机关请求指示、批准。
+    directions: [上行文]
+    subjects: [通用]
+    format: general
+    closings: {preferred: [妥否，请批示。, 以上请示，请予批复。], acceptable: [当否，请批示。, 妥否，请批复。]}
+    contract:
+      - {key: request, name: 请求事项, required: true, functions: [请求]}
+      - {key: reasons, name: 理由依据, required: true, functions: [依据]}
+      - {key: facts, name: 必要事实, required: true, functions: [事实]}
+      - {key: proposal, name: 拟议方案, required: true, functions: [措施]}
+      - {key: resources, name: 资源测算与来源, required: false, condition: 涉及资源时说明}
+    risks: [请求事项不清, 事实汇报与申请批准混杂, 一文多事]
+  批复:
+    article: 第八条（十二）
+    definition: 适用于答复下级机关请示事项。
+    directions: [下行文]
+    subjects: [通用]
+    format: general
+    closings: {preferred: [此复。], acceptable: [特此批复。]}
+    contract:
+      - {key: reference, name: 引来文（标题和发文字号）, required: true}
+      - {key: answer, name: 答复意见, required: true}
+      - {key: requirements, name: 执行要求, required: false}
+    risks: [答复不相隶属机关（应用函）]
+  议案:
+    article: 第八条（十三）
+    definition: 适用于各级人民政府按照法律程序向同级人民代表大会或者人民代表大会常务委员会提请审议事项。
+    directions: [上行文]
+    subjects: [人民政府]
+    format: general
+    closings: {preferred: [现提请审议。], acceptable: [请予审议。]}
+    contract:
+      - {key: reason, name: 提请审议事由, required: true}
+      - {key: basis, name: 依据, required: true}
+    risks: [政府部门以自身名义提出]
+  函:
+    article: 第八条（十四）
+    definition: 适用于不相隶属机关之间商洽工作、询问和答复问题、请求批准和答复审批事项。
+    directions: [平行文]
+    subjects: [通用]
+    format: letter
+    closings:
+      preferred: [特此函告。]
+      by_purpose:
+        商洽工作: [请予支持为盼。, 盼复。]
+        询问答复: [请函复。, 特此函复。]
+        请求批准: [请予批准为盼。, 请予审批。]
+    contract:
+      - {key: relation, name: 行文关系（不相隶属）, required: true}
+      - {key: matter, name: 商洽或询答事项, required: true}
+      - {key: background, name: 必要背景, required: false}
+      - {key: request, name: 明确请求, required: true, functions: [请求]}
+    risks: [对不相隶属单位使用不适当的指令口吻]
+    forbidden_phrases: [请遵照执行, 请认真贯彻执行, 务必, 你单位必须, 你们必须]
+  纪要:
+    article: 第八条（十五）
+    definition: 适用于记载会议主要情况和议定事项。
+    directions: [会议文书, 下行文]
+    subjects: [通用]
+    format: jiyao
+    closings: {preferred: [], acceptable: []}
+    contract:
+      - {key: meeting, name: 会议基本信息, required: true}
+      - {key: situation, name: 主要情况, required: true}
+      - {key: decisions, name: 确已议定事项, required: true}
+      - {key: pending, name: 待研究事项, required: false}
+      - {key: attendees, name: 出席、请假、列席人员, required: true}
+    risks: [把个人发言、讨论建议写成会议决定]
+
+# 公务事务材料：不是条例第八条列明的文种；需正式下发时须由法定文种（通常为“通知”）印发
+affairs:
+  工作方案:
+    issue_vehicle: 通知（印发类）
+    contract:
+      - {key: goal, name: 目标, required: true}
+      - {key: scope, name: 范围, required: true}
+      - {key: tasks, name: 任务, required: true, functions: [措施]}
+      - {key: division, name: 分工, required: true}
+      - {key: schedule, name: 进度安排, required: true}
+      - {key: resources, name: 资源保障, required: false}
+      - {key: evaluation, name: 评价方式, required: false}
+    risks: [自动补出未经确认的指标、预算与承诺]
+  实施方案: {alias_of: 工作方案}
+  汇报材料:
+    issue_vehicle: null
+    contract:
+      - {key: overview, name: 基本情况, required: true}
+      - {key: work, name: 主要工作和成效, required: true}
+      - {key: problems, name: 存在问题, required: false}
+      - {key: next, name: 下一步打算, required: false}
+    risks: [夸大成绩, 把计划写成成效]
+  工作总结:
+    issue_vehicle: null
+    contract:
+      - {key: work, name: 主要工作, required: true}
+      - {key: results, name: 成效, required: true}
+      - {key: problems, name: 问题与不足, required: true}
+      - {key: next, name: 下一步打算, required: false}
+    risks: [把拟议目标写成已实现成绩]
+  调研报告:
+    issue_vehicle: null
+    contract:
+      - {key: method, name: 调研基本情况, required: true}
+      - {key: findings, name: 主要发现, required: true}
+      - {key: analysis, name: 原因分析, required: true}
+      - {key: suggestions, name: 对策建议, required: true}
+    risks: [样本口径不清, 以偏概全]
+  讲话稿:
+    issue_vehicle: null
+    contract:
+      - {key: context, name: 背景与意义, required: true}
+      - {key: points, name: 主要观点与部署, required: true}
+      - {key: requirements, name: 工作要求, required: false}
+    risks: [为了气势宏大而改变事实和义务强度]
+  简报:
+    issue_vehicle: null
+    contract:
+      - {key: event, name: 事项, required: true}
+      - {key: facts, name: 主要情况, required: true}
+    risks: [未经核实即传播]
+  工作要点:
+    issue_vehicle: 通知（印发类）
+    contract:
+      - {key: overall, name: 总体要求, required: false}
+      - {key: tasks, name: 重点任务, required: true, functions: [措施]}
+      - {key: guarantee, name: 保障措施, required: false}
+    risks: [把拟议目标写成已定任务, 擅自增加指标]
+  管理办法:
+    issue_vehicle: 通知（印发类）
+    contract:
+      - {key: articles, name: 条款, required: true, functions: [措施]}
+    risks: [擅自增设权利义务与处罚, 规章制定程序缺失（合法性审核、集体审议）]
+
+# 事务材料名称 → 规范名称
+aliases:
+  方案: 工作方案
+  实施方案: 工作方案
+  工作计划: 工作方案
+  计划: 工作方案
+  汇报: 汇报材料
+  情况汇报: 汇报材料
+  总结: 工作总结
+  年度总结: 工作总结
+  调研: 调研报告
+  讲话: 讲话稿
+  发言稿: 讲话稿
+  会议纪要: 纪要
+  要点: 工作要点
+  办法: 管理办法
+  实施细则: 管理办法
+  细则: 管理办法
+  管理制度: 管理办法
+  命令: 命令（令）
+  令: 命令（令）

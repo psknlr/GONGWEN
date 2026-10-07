@@ -1,0 +1,24 @@
+# 医院：参照执行《党政机关公文处理工作条例》（条例第四十条），本院制度优先。
+name: hospital
+title: 医院
+subject_types: [医院, 事业单位]
+tiaoli_mode: 参照
+allowed_genres: [决定, 意见, 通知, 通报, 报告, 请示, 批复, 函, 纪要]
+format_profile: gbt9704-2012
+office_name: 院办公室（党委办公室）
+principal_title: 院长、党委书记等单位主要负责人
+upper_name: 主管部门
+lower_name: 院内科室和所属单位
+internal_unit_name: 科室、职能部门等二级机构
+internal_unit_rule: 二级机构不得以自身名义对外制发正式公文（参照条例第十七条同理适用，以本院制度为准）
+review_chain: [科室或职能部门拟稿, 部门负责人审核, 院办公室审核, 院领导签发]
+unit_procedures:
+  - code: UNIT_COLLECTIVE
+    name: 按本院制度确认是否须经院长办公会或党委会审议
+    trigger_keywords: [重大, 经费, 采购, 建设, 编制, 人事, 绩效分配]
+  - code: UNIT_ETHICS
+    name: 涉及人体研究等事项时，按本院制度确认伦理审查程序
+    trigger_keywords: [临床研究, 人体, 受试者, 伦理]
+self_reference_patterns: ["我院"]
+notes: 医院的发文权限不能等同于行政机关；对外行文对象与授权须按本院制度和主管部门要求核实。
+organs: []

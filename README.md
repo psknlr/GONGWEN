@@ -1,1 +1,169 @@
-# GONGWEN
+# 公文智能体 GONGWEN
+
+**面向中国内地公文场景的证据约束、规范校验与人机协同拟制系统**（《公文智能体设计 Protocol v1.0》参考实现）
+
+它不是“输入标题、一键生成公文”的工具，而是一个能回答下面这些问题的办文助手：
+
+> 为什么需要发文？由谁向谁行文？依据是什么、现在是否有效？事实是否可靠？措施是否可执行？
+> 哪些内容尚未获批？修改之后是否引入了新的错误？
+
+每次办理的交付物不是一份孤立的文稿，而是一个**送审包**：
+
+| 交付物 | 说明 |
+|---|---|
+| 文稿（DOCX / HTML / Markdown） | 按 GB/T 9704—2012 排版；页眉标注“讨论稿/送审稿”及“须经人工审核” |
+| 事实依据表 | 每句话 → 来源文件与位置、原文摘录、计算公式、口径时点、确认状态 |
+| 规范检查结果 | 每个问题标明位置、原文、建议和规则来源层级（条例/国标/标准/政策/实务/待核） |
+| 待确认事项 | 待补材料、未核实数据、专门程序（合法性审核、公平竞争审查、会签等） |
+| 版本修改记录 | 每次修订的补丁、语义变化（义务强度、范围、条件、状态）与内容哈希 |
+| 审阅工作台 | 一个页面同时呈现以上内容，点击句子即可定位证据 |
+
+文稿状态只有三种，且只由规则判定：**讨论稿 / 送审稿 / 经批准的待印发版本**。最后一种只有在导入真实审批记录、并与文稿内容哈希绑定后才可能出现；系统不自动签发、不用印、不外发。
+
+---
+
+## 快速开始
+
+```bash
+python3 -m venv .venv && . .venv/bin/activate
+pip install -e ".[dev]"            # 使用 Claude 时：pip install -e ".[anthropic]"
+gongwen doctor                     # 检查依赖、LibreOffice 渲染、字体、模型与出网配置
+
+cd examples/demo
+gongwen init --unit-name 示例市卫生健康委员会 --region 示例省
+gongwen exec "写一份向主管部门申请基层医疗示范点建设经费的报告" \
+  --material 情况说明.md --material 经费测算表.csv --clearance 公开 \
+  --to 示例市人民政府 --issuer 政府部门 --accept task_confirm
+```
+
+系统会指出：用户字面要的是“报告”，但实质是请求批准，应使用“请示”（条例第十五条：报告不得夹带请示事项）；随后停在“提纲与措施确认”，由你确认已核实的数据，再起草、审校、排版，最后停在**人工送审**节点：
+
+```bash
+gongwen task status <任务>                   # 阶段、文稿状态、待人工处理事项
+gongwen task confirm <任务> <节点> <选项>     # 处理审核节点（只能由人执行）
+gongwen task draft <任务>                    # 带句号的文稿
+gongwen task evidence <任务> s-003           # 某句的来源、原文与状态
+gongwen serve --open                         # 本地审阅工作台（仅本机访问）
+gongwen task revise <任务> --fact F-00x=40   # 关键数据变更：联动正文、合计与附件
+gongwen task locks <任务>                    # 固定句：规则与模型标定，人工可锁定、解锁
+gongwen task rewrite <任务> -p "语言更简洁有力"  # 按提示词改写未锁定的句子，校验后逐条采纳
+gongwen task import-edited <任务> 修改稿.docx    # 回读在 Word 中修改的稿件，逐句比对后作为人工修订提交
+```
+
+改写只形成建议：固定句一字不改，新增数字、时限、文件标题、审批说法的改写一律拒绝，弱化义务等语义变化转人工确认；采纳后作为修订重新审校。见 [`docs/rewrite.md`](docs/rewrite.md)。
+
+完整演示见 [`examples/demo/README.md`](examples/demo/README.md)；批复、纪要、印发类通知与差错检查的示例见 [`examples/more/README.md`](examples/more/README.md)。只想检查或排版一份已有文稿：
+
+```bash
+gongwen check examples/drafts/通知稿.txt     # 文种、行文、依据时效、减负、标点数字、附件与合计、要素格式
+gongwen check 稿件.docx --fix -o out         # 只自动修订标点、数字日期写法、序数等机械性问题，输出修订稿与逐处清单
+gongwen format examples/drafts/通知稿.txt -o out   # 按 GB/T 9704—2012 排版并做实际渲染核验
+```
+
+可检查的文稿格式：TXT、Markdown、DOCX（含 Word 自动编号的层次序数、修订痕迹与批注提示）、带文字层的 PDF（自动去掉页码与页眉、把视觉行还原为段落）。扫描件须先做文字识别。
+
+### 字体、公文模板与预览
+
+```bash
+gongwen fonts check                                   # 方正小标宋简体、仿宋_GB2312 等是否已安装（族名逐字核对），渲染时用什么替代
+gongwen fonts install --from 字库目录/                 # 安装本单位合法取得的字库文件（核对族名，不一致时给出模板设置建议）
+gongwen fonts install --open                          # Debian/Ubuntu：安装开源替代字体（仅供预览）
+gongwen template new 本单位 --from windows-fonts       # 公文模板：在 GB/T 9704—2012 默认参数上做本单位调整
+gongwen template set 本单位 elements.title.size=小二 unit.organ_mark=示例市卫生健康委员会文件 unit.doc_number_prefix=示卫发
+gongwen template show 本单位                           # 逐项列出偏离国标的设置（条款与强度）
+gongwen template export-dotx 本单位 -o 本单位公文.dotx  # Word 模板：页面、版心、页码与公文段落样式
+gongwen format 稿件.docx --template 本单位              # 按模板排版（exec、task new 同样可加 --template）
+gongwen preview 稿件.docx --template 本单位 --open      # 渲染为页面图像，并排显示，附核验结果
+```
+
+方正小标宋简体、仿宋_GB2312、楷体_GB2312 是授权字库（方正字库、中易），须由使用单位自行取得，本系统不下载、不附带；Windows 自带的是“仿宋”“楷体”，可用内置模板 `windows-fonts` 或在模板中改字库名。未安装时渲染预览以开源字体（思源宋体 Black、霞鹜文楷等）替代，只供预览，报告中逐项写明“已替代”。模板可以偏离国标（单位另有细则时），但每项偏离都在模板查看与排版报告中列出。`gongwen serve` 的工作台另有模板编辑与预览页面（`/templates`）。详见 [`docs/configuration.md`](docs/configuration.md) 第六至八节。
+
+可起草的文种：条例规定的全部 15 个法定文种——决议、决定、命令（令）、公报、公告、通告、意见、通知、通报、报告、请示、批复、议案、函、纪要，以及通知的印发、转发、批转、会议、任免、知照等变体，复函、询问函、告知函、征求意见反馈函，指导意见，联合行文；事务文书有工作方案（计划）、工作要点、管理办法（细则）、工作总结、汇报材料、调研报告、讲话稿、简报。命令（令）、简报、纪要、信函等特定格式按 GB/T 9704—2012 第 10 章排版。凡须由真实决定支撑的内容（批复的答复意见、通报的表彰批评决定、决定事项、纪要的议定事项、决议事项、任免事项）只取材料中的真实决定，没有时留【待补】，系统不代为决定。各文种的结构、内容来源、权限检查与对应用例见 [`docs/genres.md`](docs/genres.md)。
+
+## 三种使用方式
+
+| 方式 | 命令 | 说明 |
+|---|---|---|
+| 命令行 / 无头 | `gongwen exec … --json` | 输出 NDJSON 事件流（结果行含 `forbidden_materials`）；退出码 0 到达人工送审、3 停在待人工处理的节点、4 禁止进入（含所给材料全部未获准入）或超出权限、2 用法或文件错误、1 失败 |
+| 对话 | `gongwen chat` | 模型助手推进流程、解释问题、提交修改建议；审核节点由你用斜杠命令处理（`/confirm`、`/apply`…） |
+| 接入其他智能体 | `gongwen mcp` | 作为 MCP 服务接入 Codex、Grok Build、grok-cli、Claude Code、ZCode 等；见 [`integrations/`](integrations/) |
+
+12 项技能说明（Agent Skills 格式）可用 `gongwen skills install --dest .agents/skills`（Codex、grok-cli）或 `--dest .claude/skills`（Claude Code）安装。
+
+## 架构一览
+
+```
+人工通道（命令行 / 斜杠命令 / 本地工作台）──┐            ┌── 模型通道（对话代理 / MCP 客户端）
+                                          ▼            ▼
+                         受控主编排器：程序化状态机（orchestrator/engine.py）
+   材料准入 → 任务确认 → 材料解析 → 依据与事实准备 → 提纲确认 → 起草 → 审校 → 定向修订 → 排版检查 → 人工送审
+   异常：待补材料 / 发现冲突 / 超出权限 / 处理失败 / 禁止进入（失败必须可见，不悄悄降级为猜测）
+                                          │
+        ┌──────────────┬──────────────────┼──────────────────┬───────────────────┐
+   12 项可组合技能   独立审校通道     确定性规则与计算工具      治理层（harness）       数据层（五个隔离数据区）
+   skills/*.py       新上下文复核      rules/ 89 条，标注来源层级  权限、审批、出网网关、   依据库 / 本事项材料 /
+   agent_skills/     模型意见须定位    表格复算、口径、时效       预算、钩子、审计日志     文风案例 / 规则 / 审计
+```
+
+- **内核**（`kernel/`）：借鉴 DeepSeek Harness / Cordis 的“一切皆插件”——服务注入、事件、可回收副作用；单位可用插件替换检索器、追加规则。
+- **治理**（`harness/`）：权限控制到“人—事项—材料—工具动作”；出网网关是唯一出口，默认拒绝；会话日志为哈希链、只记哈希与摘要，可校验、回放、分叉。
+- **模型**（`llm/`）：Anthropic Claude（官方 SDK），以及 OpenAI GPT、DeepSeek、智谱 GLM、MiniMax、通义千问、Kimi、xAI Grok、Ollama、vLLM 等 OpenAI 兼容接口（预设见 `llm/presets.py`，接口差异逐一处理）；未配置模型时走完整的确定性路径。所有模型输出都要经确定性校验，越过证据的内容一律拒绝。
+
+详见 [`docs/architecture.md`](docs/architecture.md)、[`docs/protocol-mapping.md`](docs/protocol-mapping.md)（设计条目 → 实现与测试）、[`docs/harness-lineage.md`](docs/harness-lineage.md)（与 grok-cli、Codex、DeepSeek Harness、ZCode 的关系）。
+
+## 安全边界（摘要）
+
+- 材料先在本地扫描（密级标志、个人信息、隐藏内容、提示注入）再决定能否进入；带密级标志的材料任何环境都禁止进入并删除原件；
+- 公开研发版只处理公开材料；单位批准环境须按制度显式开启，模型只接收不高于其获准级别的材料；
+- 模型通道（对话代理、MCP 客户端）不能处理审核节点、导入审批、确认材料准入、采纳修改建议；**协议接入不等于授权**；
+- 资料中的指令性语句只作为数据，不驱动工具；
+- 发布、外发、电子签章、用印不属于本系统的自动工具；
+- 宿主智能体对工作区文件的直接访问不受本系统控制，数据目录应放在宿主工作区之外。
+
+详见 [`docs/security.md`](docs/security.md)。
+
+## 评测
+
+`gongwen eval --ablate all --baselines` 在 134 个合成回归用例（覆盖全部 15 个法定文种、常见变体与 8 类事务文书）上运行完整系统、逐项消融与“全部关闭”基线（CI 在每次推送时运行测试与完整系统评测）：
+
+| 变体 | 通过 | 问题检出率 | 对照误报（重要以上） | 无来源数字句占比 | 虚构数字 | 人工送审被自动通过 |
+|---|---|---|---|---|---|---|
+| full | 134/134 | 1.0 | 0 | 0.0 | 0 | 0 |
+| minimal（全部模块关闭） | 114/134 | 0.79 | 0 | 0.0 | 0 | 0 |
+
+每个模块关闭后都有对应用例由通过变为失败（例如关闭事实账本：材料间数据冲突不再被发现；关闭时效检查：引用已停止执行的 2000 年《国家行政机关公文处理办法》、按历史时点起草等不再被指出）。这些结果只说明在合成用例上的回归表现，不能外推为真实办文质量；评测协议、局限与扩充计划见 [`docs/evaluation.md`](docs/evaluation.md)。
+
+## 规则与依据
+
+- 规则库 89 条，每条标明来源层级与条款：只有条例、国标、标准原文才说“规定”，实务惯例说“实务通常”；标准中“一般”“推荐”“可以”的条件性要求只提示，不当作硬错误。见 [`docs/rules.md`](docs/rules.md)。
+- 依据库内置《党政机关公文处理工作条例》全文 42 条（逐字核对）、GB/T 9704—2012 条款要点等，以及已停止执行的旧规（用于识别过时引用）。本单位依据经 `gongwen policy add` 登记，须补全效力与适用元数据。
+
+## 配置
+
+工作区 `.gongwen/config.toml`（`gongwen init` 生成），优先级：默认值 < `~/.gongwen/config.toml` < 工作区 < 配置档 `-p` < 环境变量 < 命令行 `-c key=value`。见 [`docs/configuration.md`](docs/configuration.md)。
+
+接入模型（Claude、GPT、DeepSeek、GLM、MiniMax、通义、Kimi、本地 Ollama/vLLM 等）：
+
+```bash
+gongwen model presets                                              # 可接入的服务商、地址、密钥环境变量与默认型号
+export DEEPSEEK_API_KEY=…                                          # 密钥只放在环境变量里，不写入配置
+gongwen model add ds --preset deepseek --role heavy --allow-egress # 写入具名模型、路由与出网白名单
+gongwen model test ds                                              # 一次受控的最小调用：密钥、出网、型号、JSON 模式
+gongwen model remote ds                                            # 查询服务商当前可用的型号
+```
+
+公共云模型默认只处理公开材料；型号名称会随服务商更新，以 `gongwen model remote` 为准。详见 [`docs/configuration.md`](docs/configuration.md#三模型接入)。
+
+## 开发
+
+```bash
+pip install -e ".[dev]"
+pytest                      # 单元与端到端测试（含 LibreOffice 渲染核验；未安装时自动跳过）
+gongwen eval                # 回归评测
+```
+
+## 说明
+
+- 本仓库中的机关名称、数据均为合成示例（“示例市”“示例省”），不对应真实单位；
+- 字体：国标只规定字体类别，仿宋_GB2312、方正小标宋简体等字库名属实务且为授权字库；本机缺字库时渲染预览以开源字体替代，系统会如实报告“已替代”，定稿须在安装指定字库的环境中复核；
+- 系统定位是辅助起草与检查，不形成审批结论；输出须经有权人员审核，按本单位公文处理制度办理。

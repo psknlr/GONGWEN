@@ -1,0 +1,21 @@
+# 高校：参照执行《党政机关公文处理工作条例》，以学校公文处理办法为准。
+name: university
+title: 高校
+subject_types: [高校, 事业单位]
+tiaoli_mode: 参照
+allowed_genres: [决定, 意见, 通知, 通报, 报告, 请示, 批复, 函, 纪要]
+format_profile: gbt9704-2012
+office_name: 党委办公室、校长办公室
+principal_title: 党委书记、校长等学校主要负责人
+upper_name: 主管部门、举办者
+lower_name: 学院、部处和直属单位
+internal_unit_name: 学院、部处等二级单位
+internal_unit_rule: 二级单位不得以自身名义对外制发应由学校发布的正式公文（以学校制度为准）
+review_chain: [部门拟稿, 部门负责人审核, 两办审核, 校领导签发]
+unit_procedures:
+  - code: UNIT_COLLECTIVE
+    name: 按学校制度确认是否须经党委常委会或校长办公会审议
+    trigger_keywords: [重大, 经费, 招生, 人事, 编制, 基建, 采购, 学科]
+self_reference_patterns: ["我校"]
+notes: 涉及学生、教职工权利义务的规范性制度，须按学校规章制定程序办理。
+organs: []
