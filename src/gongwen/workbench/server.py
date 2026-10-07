@@ -70,6 +70,20 @@ def early_stage_html(engine: Engine, task_id: str, api: str, token: str) -> str:
     )
 
 
+def _str(v, name: str) -> str:
+    if not isinstance(v, str) or not v.strip():
+        raise ValueError(f"{name} 须为非空文本")
+    return v
+
+
+def _str_list(v, name: str) -> list[str]:
+    if v is None:
+        return []
+    if not isinstance(v, list) or not all(isinstance(x, str) for x in v) or len(v) > 500:
+        raise ValueError(f"{name} 须为文本列表")
+    return v
+
+
 def make_handler(engine: Engine, user: Principal, token: str):
     class Handler(BaseHTTPRequestHandler):
         server_version = "GongwenWorkbench/1.0"
@@ -149,6 +163,28 @@ def make_handler(engine: Engine, user: Principal, token: str):
                     engine.resolve_checkpoint(body["task_id"], body["cp_id"], body["option"], by=user, note=note, data=body.get("data") or {})
                     st = engine.advance(body["task_id"], by=user)
                     return self._json(200, {"message": f"已处理，当前阶段：{st.stage.value}", "stage": st.stage.value})
+                if path == "/api/locks":
+                    ids = {k: _str_list(body.get(k), k) for k in ("lock", "unlock", "reset")}
+                    reason = body.get("reason") or ""
+                    if not isinstance(reason, str):
+                        raise ValueError("reason 须为文本")
+                    engine.set_sentence_locks(body["task_id"], by=user, reason=reason, **ids)
+                    return self._json(200, {"message": "已更新固定句"})
+                if path == "/api/locks/calibrate":
+                    r = engine.calibrate_locks(body["task_id"], by=user, prompt=_str(body.get("prompt"), "prompt"))
+                    return self._json(200, {"message": f"模型标定新增固定句 {len(r['added'])} 句" + ("；" + "；".join(r["notes"]) if r["notes"] else "")})
+                if path == "/api/rewrite":
+                    r = engine.rewrite(body["task_id"], by=user, prompt=_str(body.get("prompt"), "prompt"), ai_calibrate=bool(body.get("ai_calibrate")))
+                    c = r["counts"]
+                    msg = f"已生成改写 {r['rewrite_id']}：可采纳 {c['proposed']} 条，需人工确认 {c['needs_human']} 条，已拒绝 {c['rejected']} 条"
+                    return self._json(200, {"message": msg + ("；" + "；".join(r["notes"]) if r["notes"] else ""), "rewrite_id": r["rewrite_id"]})
+                if path == "/api/rewrite/apply":
+                    res = engine.apply_rewrite(body["task_id"], _str(body.get("rewrite_id"), "rewrite_id"), by=user, patch_ids=_str_list(body.get("patch_ids"), "patch_ids") or None, include_flagged=bool(body.get("include_flagged")))
+                    st = engine.advance(body["task_id"], by=user)
+                    return self._json(200, {"message": f"已采纳 {len(res['applied'])} 条改写，当前阶段：{st.stage.value}" + (f"；跳过：{'；'.join(res['skipped'])}" if res["skipped"] else ""), "stage": st.stage.value})
+                if path == "/api/rewrite/discard":
+                    engine.discard_rewrite(body["task_id"], _str(body.get("rewrite_id"), "rewrite_id"), by=user)
+                    return self._json(200, {"message": "已放弃本次改写，原稿未改动"})
                 if path == "/api/revise":
                     engine.request_revision(body["task_id"], by=user, instruction=body.get("instruction"), edits=body.get("edits"), fact_changes=body.get("fact_changes"))
                     st = engine.advance(body["task_id"], by=user)

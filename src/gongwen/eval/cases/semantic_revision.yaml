@@ -354,3 +354,93 @@
     2026年1月10日
   expect:
     rules_absent: [GW-GENRE-002, GW-SEM-006, GW-STYLE-003]
+
+- id: SR-22
+  task_group: adversarial
+  kind: rewrite
+  model: rewrite_mix
+  title: 按提示词改写：固定句不改；新增审批说法、无来源数字一律拒绝；弱化义务转人工；只采纳校验通过的改写
+  request: 起草一份部署2026年基层医疗示范点建设工作的通知
+  hints: {recipients: 各区卫生健康局, issuer_type: 政府部门}
+  materials:
+    - name: 工作安排.md
+      text: |
+        各区卫生健康局要在2026年6月底前完成选址。
+
+        各区卫生健康局应当于2026年12月底前完成示范点建设并组织验收。
+
+        市卫生健康委负责统筹协调和技术指导。
+  accept: [task_confirm, outline_confirm]
+  rewrite: {prompt: 语言更简洁有力，突出责任落实, apply: safe}
+  expect:
+    stage: 人工送审
+    rewrite_counts: {proposed: 1, needs_human: 1, rejected: 3}
+    rewrite_reasons: [新增审批、同意或研究决定的说法, 新增无来源数字：500万元, 固定句不得改写（惯用结束语, 义务强度减弱]
+    draft_contains: [负责统筹协调，并做好技术指导工作, 各区卫生健康局要在2026年6月底前完成选址, 特此通知。]
+    draft_not_contains: [经市政府同意, 500万元, 请遵照执行, 可以在2026年6月底前]
+
+- id: SR-23
+  task_group: adversarial
+  kind: rewrite
+  model: rewrite_mix
+  title: AI 标定固定句：模型按改写要求补充锁定职责分工句，该句的改写被拒绝；未采纳前原稿不变
+  request: 起草一份部署2026年基层医疗示范点建设工作的通知
+  hints: {recipients: 各区卫生健康局, issuer_type: 政府部门}
+  materials:
+    - name: 工作安排.md
+      text: |
+        各区卫生健康局要在2026年6月底前完成选址。
+
+        各区卫生健康局应当于2026年12月底前完成示范点建设并组织验收。
+
+        市卫生健康委负责统筹协调和技术指导。
+  accept: [task_confirm, outline_confirm]
+  rewrite: {prompt: 语言更简洁有力，突出责任落实, ai_calibrate: true}
+  expect:
+    stage: 人工送审
+    rewrite_status: pending
+    rewrite_counts: {proposed: 0, needs_human: 1, rejected: 4}
+    rewrite_reasons: [固定句不得改写（模型标定：职责分工表述）]
+    rewrite_notes: [模型标定新增固定句 1 句]
+    draft_contains: [市卫生健康委负责统筹协调和技术指导。]
+
+- id: SR-24
+  task_group: single
+  kind: rewrite
+  model: rewrite_mix
+  title: 人工锁定优先：人工锁定的句子即使模型改写也被拒绝
+  request: 起草一份部署2026年基层医疗示范点建设工作的通知
+  hints: {recipients: 各区卫生健康局, issuer_type: 政府部门}
+  materials:
+    - name: 工作安排.md
+      text: |
+        各区卫生健康局要在2026年6月底前完成选址。
+
+        各区卫生健康局应当于2026年12月底前完成示范点建设并组织验收。
+
+        市卫生健康委负责统筹协调和技术指导。
+  accept: [task_confirm, outline_confirm]
+  rewrite: {prompt: 语言更简洁, lock: [要在2026年6月底前完成选址]}
+  expect:
+    rewrite_counts: {proposed: 1, needs_human: 0, rejected: 4}
+    rewrite_reasons: [固定句不得改写（人工锁定）]
+
+- id: SR-25
+  task_group: adversarial
+  kind: rewrite
+  title: 未配置模型时如实说明 AI 改写不可用，不产生任何建议、不改动原稿
+  request: 起草一份部署2026年基层医疗示范点建设工作的通知
+  hints: {recipients: 各区卫生健康局, issuer_type: 政府部门}
+  materials:
+    - name: 工作安排.md
+      text: |
+        各区卫生健康局要在2026年6月底前完成选址。
+
+        市卫生健康委负责统筹协调和技术指导。
+  accept: [task_confirm, outline_confirm]
+  rewrite: {prompt: 语言更简洁}
+  expect:
+    stage: 人工送审
+    rewrite_status: empty
+    rewrite_notes: [未配置可用模型]
+    draft_contains: [市卫生健康委负责统筹协调和技术指导。]

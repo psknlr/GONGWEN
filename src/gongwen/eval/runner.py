@@ -115,7 +115,33 @@ def _strengthen(text: str) -> str:
     return text.replace("可以", "必须").replace("原则上", "")
 
 
+def _rewrite_mix(messages, system, tools, schema):
+    """改写场景：一条合规改写、一条弱化义务、一条加审批说法、一条加无来源数字、一条改固定句。"""
+    props = (schema or {}).get("properties", {})
+    if "keep" in props:
+        rows = json.loads(messages[0].content.split("未锁定的句子：\n", 1)[1])
+        return {"keep": [{"sid": r["sid"], "reason": "职责分工表述"} for r in rows if "负责" in r["text"]]}
+    if "edits" in props and "改写要求" in messages[0].content:
+        rows = json.loads(messages[0].content.split("文稿逐句（按顺序）：\n", 1)[1])
+        edits = []
+        for r in rows:
+            t = r["text"]
+            if "负责统筹协调和技术指导" in t:
+                edits.append({"sid": r["sid"], "new_text": t.replace("负责统筹协调和技术指导", "负责统筹协调，并做好技术指导工作"), "reason": "语句更顺"})
+            elif "要在" in t:
+                edits.append({"sid": r["sid"], "new_text": t.replace("要在", "可以在"), "reason": "语气缓和"})
+            elif t.startswith("现就"):
+                edits.append({"sid": r["sid"], "new_text": "经市政府同意，" + t, "reason": "增强权威"})
+            elif "组织验收" in t:
+                edits.append({"sid": r["sid"], "new_text": t.replace("组织验收", "组织验收，投入资金500万元"), "reason": "补充"})
+            elif t == "特此通知。":
+                edits.append({"sid": r["sid"], "new_text": "特此通知，请遵照执行。", "reason": "加强要求"})
+        return {"edits": edits}
+    return _drafting_responder(lambda x: x)(messages, system, tools, schema)
+
+
 RESPONDERS: dict[str, Callable] = {
+    "rewrite_mix": _rewrite_mix,
     "fabricate": _drafting_responder(_fabricate),
     "approval_claim": _drafting_responder(_approval),
     "strengthen": _drafting_responder(_strengthen),
@@ -256,6 +282,29 @@ def _revise(eng, task_id: str, rev: dict[str, Any], user):
     return eng.advance(task_id, by=user, auto_accept=set(rev.get("accept") or ["review_escalation"]))
 
 
+def _rewrite(eng, task_id: str, rw: dict[str, Any], user):
+    """按用例脚本锁定、改写并（可选）采纳：apply 为 safe/all/none。"""
+    if rw.get("lock") or rw.get("unlock"):
+        eng.set_sentence_locks(task_id, by=user, lock=[s for s in _find_sids(eng, task_id, rw.get("lock") or [])], unlock=[s for s in _find_sids(eng, task_id, rw.get("unlock") or [])])
+    r = eng.rewrite(task_id, by=user, prompt=rw["prompt"], ai_calibrate=bool(rw.get("ai_calibrate")))
+    if rw.get("apply") in ("safe", "all") and r["status"] == "pending":
+        eng.apply_rewrite(task_id, r["rewrite_id"], by=user, include_flagged=rw["apply"] == "all")
+        return eng.advance(task_id, by=user, auto_accept=set(rw.get("accept") or ["review_escalation"]))
+    return eng.load_state(task_id)
+
+
+def _find_sids(eng, task_id: str, needles: list[str]) -> list[str]:
+    """用例按句子内容指定锁定对象（句号随起草而变）。"""
+    locks = eng.sentence_locks(task_id)
+    out = []
+    for n in needles:
+        hit = next((lk["sid"] for lk in locks if n in lk["text"]), None)
+        if hit is None:
+            raise ValueError(f"改写脚本找不到句子：{n}")
+        out.append(hit)
+    return out
+
+
 def _expect_pipeline(eng, st, exp: dict[str, Any], admissions: list) -> tuple[list[Check], dict[str, Any]]:
     from ..schemas.genre import GenreDecision
     from ..schemas.review import ReviewReport
@@ -316,6 +365,23 @@ def _expect_pipeline(eng, st, exp: dict[str, Any], admissions: list) -> tuple[li
             codes = {f.code for f in (g.authority_findings if g else [])}
             for x in v:
                 add(f"authority:{x}", x in codes, "、".join(sorted(codes)))
+        elif k == "rewrite_counts":
+            rr = eng.rewrite_result(st.task_id) or {"counts": {}}
+            for status, n in v.items():
+                add(f"rewrite:{status}", rr["counts"].get(status, 0) == n, f"实际 {rr['counts'].get(status, 0)}")
+        elif k == "rewrite_reasons":
+            rr = eng.rewrite_result(st.task_id) or {"patches": []}
+            blob = "\n".join(f"{p['status']}:{p['reason']}" for p in rr["patches"])
+            for x in v:
+                add(f"rewrite_reason:{x}", x in blob, blob[:200])
+        elif k == "rewrite_notes":
+            rr = eng.rewrite_result(st.task_id) or {"notes": []}
+            blob = "\n".join(rr.get("notes", []))
+            for x in v:
+                add(f"rewrite_note:{x}", x in blob, blob[:200])
+        elif k == "rewrite_status":
+            rr = eng.rewrite_result(st.task_id) or {}
+            add("rewrite_status", rr.get("status") == v, f"实际 {rr.get('status')}")
         elif k == "max_occurrences":
             for phrase, n in v.items():
                 add(f"max_occurrences:{phrase}", text.count(phrase) <= n, f"出现 {text.count(phrase)} 次")
@@ -590,6 +656,8 @@ def _run_case(case: dict[str, Any], variant: str, flags: dict[str, bool]) -> Cas
                     st = _human_loop(eng, st.task_id, case, user)
                     if kind == "revision":
                         st = _revise(eng, st.task_id, case["revise"], user)
+                    elif kind == "rewrite":
+                        st = _rewrite(eng, st.task_id, case["rewrite"], user)
                 checks, metrics = _expect_pipeline(eng, st, case.get("expect") or {}, admissions)
                 res.checks += checks
                 res.metrics.update(metrics)
@@ -627,7 +695,7 @@ def summarize(results: list[CaseResult]) -> dict[str, Any]:
             continue
         checks = [r for r in rs if r.kind == "check" and not r.metrics.get("control")]
         controls = [r for r in rs if r.metrics.get("control")]
-        pipes = [r for r in rs if r.kind in ("pipeline", "revision", "model")]
+        pipes = [r for r in rs if r.kind in ("pipeline", "revision", "model", "rewrite")]
         exp = sum(r.metrics.get("expected_rules", 0) for r in checks)
         found = sum(r.metrics.get("found_rules", 0) for r in checks)
         nums = sum(r.metrics.get("numeric_sentences", 0) for r in pipes)

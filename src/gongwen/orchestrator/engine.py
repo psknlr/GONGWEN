@@ -663,6 +663,10 @@ class Engine:
             {"cp_id": c.cp_id, "kind": c.kind.value, "question": c.question, "details": c.details, "options": [o.model_dump() for o in c.options]}
             for c in st.pending_checkpoints()
         ]
+        # 固定句与改写建议随人工操作变化（不改变文稿版本），每次都刷新
+        data["locks"] = self.sentence_locks(task_id)
+        data["rewrite"] = self.rewrite_result(task_id)
+        data["model_ready"] = self.sc(st, self.log(task_id)).model_available("heavy")
         return data
 
     def workbench_page(self, task_id: str, *, api: str = "", token: str = "") -> str | None:
@@ -949,12 +953,12 @@ class Engine:
 
     # ================================================================ 修订请求（人工发起）
     @_serialized
-    def request_revision(self, task_id: str, *, by: Principal, instruction: str | None = None, edits: list[dict] | None = None, fact_changes: list[dict] | None = None) -> TaskState:
+    def request_revision(self, task_id: str, *, by: Principal, instruction: str | None = None, edits: list[dict] | None = None, fact_changes: list[dict] | None = None, rewrite_patches: list | None = None) -> TaskState:
         st = self.load_state(task_id)
         if not by.is_human:
             raise PermissionError("修订请求须由人发起")
         self._require(by, Action.IR_PATCH, st.matter_id)
-        data = {"instruction": instruction, "edits": edits or [], "fact_changes": fact_changes or []}
+        data = {"instruction": instruction, "edits": edits or [], "fact_changes": fact_changes or [], "rewrite_patches": rewrite_patches or []}
         self._check_revision(st, data)
         log = self.log(task_id)
         for cp in st.pending_checkpoints():
@@ -1023,6 +1027,13 @@ class Engine:
             work = skill.apply(sc, work, ps)
             work.version = ir.version
             combined.patches += ps.patches
+        rewrite_ps = data.get("rewrite_patches") or []
+        if rewrite_ps:
+            # 人工采纳的 AI 改写：作者记为“模型（人工采纳）”，句子来源标为修订，便于追溯
+            ps = PatchSet(doc_id=work.doc_id, round=rnd, from_version=ir.version, patches=[p.model_copy(update={"status": "proposed", "author": f"model（{by.id} 采纳）"}) for p in rewrite_ps])
+            work = skill.apply(sc, work, ps)
+            work.version = ir.version
+            combined.patches += ps.patches
         if data.get("instruction"):
             ps = skill.instruction(sc, work, data["instruction"], ledger, rnd)
             work = skill.apply(sc, work, ps)
@@ -1033,7 +1044,7 @@ class Engine:
         new.version = ir.version + 1
         new.based_on_version = ir.version
         new.status = DocStatus.DISCUSSION
-        new.meta.update({"created_at": utcnow().isoformat(), "author": by.id, "summary": "人工发起的修订" + ("（含关键事实变更）" if data.get("fact_changes") else "")})
+        new.meta.update({"created_at": utcnow().isoformat(), "author": by.id, "summary": ("采纳 AI 改写建议" if rewrite_ps and not (data.get("edits") or data.get("instruction")) else "人工发起的修订") + ("（含关键事实变更）" if data.get("fact_changes") else "")})
         combined.to_version = new.version
         self.store.save_version(st.task_id, new.doc_id, new.version, new)
         st.current_version = new.version
@@ -1182,6 +1193,201 @@ class Engine:
         self.log(task_id).append("proposal.rejected", {"proposal_id": proposal_id}, actor=by.id, stage=st.stage.value)
         self.save_state(st)
         return st
+
+    # ================================================================ 固定句标定与按提示词改写
+    def sentence_locks(self, task_id: str) -> list[dict[str, Any]]:
+        """正文各句的锁定状态与理由（人工 > 模型标定 > 规则标定）。"""
+        from ..skills import rewrite as rw
+
+        st = self.load_state(task_id)
+        ir = self.current_ir(st)
+        if ir is None:
+            return []
+        locks = rw.effective_locks(ir, st.options.get("sentence_locks", {}), st.options.get("model_locks", {}))
+        texts = {s.sid: s.text for _, s in rw.body_sentences(ir)}
+        return [{**lk.to_dict(), "text": texts.get(lk.sid, "")} for lk in locks]
+
+    def _set_locks(self, st: TaskState, ir: DocumentIR, by: Principal, lock: list[str], unlock: list[str], reset: list[str], reason: str) -> int:
+        from ..skills import rewrite as rw
+
+        valid = {s.sid for _, s in rw.body_sentences(ir)}
+        bad = [x for x in [*lock, *unlock, *reset] if x not in valid]
+        if bad:
+            raise KeyError(f"正文中没有这些句子：{'、'.join(bad)}")
+        both = set(lock) & set(unlock)
+        if both:
+            raise ValueError(f"同一句子不能同时锁定和解锁：{'、'.join(sorted(both))}")
+        human_locks = st.options.setdefault("sentence_locks", {})
+        at = utcnow().isoformat()
+        reason = strip_controls(reason or "")[:200]
+        for sid in lock:
+            human_locks[sid] = {"locked": True, "by": by.id, "at": at, "reason": reason or "人工锁定"}
+        for sid in unlock:
+            # 同一次既锁定又解锁时，理由只用于锁定的句子
+            human_locks[sid] = {"locked": False, "by": by.id, "at": at, "reason": (reason if not lock else "") or "人工解除锁定"}
+        for sid in reset:
+            human_locks.pop(sid, None)
+        return len(lock) + len(unlock) + len(reset)
+
+    @_serialized
+    def set_sentence_locks(self, task_id: str, *, by: Principal, lock: list[str] | None = None, unlock: list[str] | None = None, reset: list[str] | None = None, reason: str = "") -> list[dict[str, Any]]:
+        """人工锁定、解锁句子（reset 恢复为系统标定）。锁定只影响 AI 改写，不改变文稿内容。"""
+        st = self.load_state(task_id)
+        if not by.is_human:
+            raise PermissionError("固定句须由人确定，模型通道不能锁定或解锁")
+        self._require(by, Action.IR_PATCH, st.matter_id)
+        ir = self.current_ir(st)
+        if ir is None:
+            raise ValueError("尚未形成文稿")
+        self._set_locks(st, ir, by, list(lock or []), list(unlock or []), list(reset or []), reason)
+        self.log(task_id).append("locks.updated", {"lock": list(lock or []), "unlock": list(unlock or []), "reset": list(reset or []), "version": ir.version}, actor=by.id, stage=st.stage.value)
+        self.save_state(st)
+        return self.sentence_locks(task_id)
+
+    def _rewrite_prompt(self, prompt: str) -> str:
+        prompt = strip_controls(prompt or "").strip()
+        if not prompt:
+            raise ValueError("改写要求不能为空")
+        if len(prompt) > 2000:
+            raise ValueError("改写要求过长（不超过 2000 字）")
+        return prompt
+
+    @_serialized
+    def calibrate_locks(self, task_id: str, *, by: Principal, prompt: str) -> dict[str, Any]:
+        """模型标定固定句：按改写要求补充应保持原文的句子（只增不减，人工可随时解锁）。"""
+        from ..skills import rewrite as rw
+
+        st = self.load_state(task_id)
+        if not by.is_human:
+            raise PermissionError("固定句标定须由人发起")
+        self._require(by, Action.IR_PATCH, st.matter_id)
+        ir = self.current_ir(st)
+        if ir is None:
+            raise ValueError("尚未形成文稿")
+        prompt = self._rewrite_prompt(prompt)
+        log = self.log(task_id)
+        sc = self.sc(st, log)
+        locks = rw.effective_locks(ir, st.options.get("sentence_locks", {}), st.options.get("model_locks", {}))
+        added, notes = rw.calibrate(sc, ir, prompt, locks)
+        st.options.setdefault("model_locks", {}).update(added)
+        log.append("locks.calibrated", {"added": sorted(added), "prompt_sha256": sha256_text(prompt), "version": ir.version}, actor=by.id, stage=st.stage.value)
+        self.save_state(st)
+        return {"added": added, "notes": notes, "locks": self.sentence_locks(task_id)}
+
+    @_serialized
+    def rewrite(self, task_id: str, *, by: Principal, prompt: str, lock: list[str] | None = None, unlock: list[str] | None = None, ai_calibrate: bool = False) -> dict[str, Any]:
+        """结合改写要求重写未锁定的句子，形成待人工采纳的改写建议（不直接改稿）。"""
+        from ..skills import rewrite as rw
+
+        st = self.load_state(task_id)
+        if not by.is_human:
+            raise PermissionError("改写须由人发起；模型通道只能提交修改建议")
+        self._require(by, Action.IR_PATCH, st.matter_id)
+        ir = self.current_ir(st)
+        if st.stage not in REVISABLE or ir is None:
+            raise ValueError(f"任务处于“{st.stage.value}”，没有可改写的文稿（须在审校至送审各阶段、形成文稿后）")
+        prompt = self._rewrite_prompt(prompt)
+        log = self.log(task_id)
+        sc = self.sc(st, log)
+        if lock or unlock:
+            self._set_locks(st, ir, by, list(lock or []), list(unlock or []), [], "")
+        notes: list[str] = []
+        if ai_calibrate:
+            locks = rw.effective_locks(ir, st.options.get("sentence_locks", {}), st.options.get("model_locks", {}))
+            added, cal_notes = rw.calibrate(sc, ir, prompt, locks)
+            st.options.setdefault("model_locks", {}).update(added)
+            notes += cal_notes + ([f"模型标定新增固定句 {len(added)} 句"] if added else [])
+        locks = rw.effective_locks(ir, st.options.get("sentence_locks", {}), st.options.get("model_locks", {}))
+        genre = ir.genre or ir.material_type or ""
+        outcome = rw.rewrite(sc, ir, prompt, locks, self.load_matter_ledger(st), genre)
+        rid = st.ids.next("RW")
+        counts = {k: sum(p.status == k for p in outcome.patches) for k in ("proposed", "needs_human", "rejected")}
+        record = {
+            "rewrite_id": rid,
+            "prompt": prompt,
+            "at": utcnow().isoformat(),
+            "by": by.id,
+            "version": ir.version,
+            "locked": sum(lk.locked for lk in locks),
+            "editable": sum(not lk.locked for lk in locks),
+            "counts": counts,
+            "notes": notes + outcome.notes,
+            "status": "pending" if counts["proposed"] + counts["needs_human"] else "empty",
+        }
+        sc.save(f"rewrite_{rid}", PatchSet(doc_id=ir.doc_id, round=0, from_version=ir.version, patches=outcome.patches))
+        st.options.setdefault("rewrites", []).append(record)
+        log.append("rewrite.generated", {"rewrite_id": rid, "prompt_sha256": sha256_text(prompt), "version": ir.version, **counts, "model_used": outcome.model_used}, actor=by.id, stage=st.stage.value)
+        self.save_state(st)
+        return self.rewrite_result(task_id, rid)
+
+    def rewrite_result(self, task_id: str, rewrite_id: str | None = None) -> dict[str, Any] | None:
+        """某次（默认最近一次）改写的建议与校验结果。"""
+        st = self.load_state(task_id)
+        recs = st.options.get("rewrites", [])
+        rec = next((r for r in reversed(recs) if rewrite_id in (None, r["rewrite_id"])), None)
+        if rec is None:
+            return None
+        ps = self.store.load_model(task_id, f"rewrite_{rec['rewrite_id']}", PatchSet)
+        return {**rec, "patches": [p.model_dump(mode="json") for p in (ps.patches if ps else [])]}
+
+    @_serialized
+    def apply_rewrite(self, task_id: str, rewrite_id: str, *, by: Principal, patch_ids: list[str] | None = None, include_flagged: bool = False) -> dict[str, Any]:
+        """人工采纳改写建议：经校验拒绝的不能采纳；需人工确认的须明确选择；过期或已锁定的句子跳过。"""
+        from ..skills import rewrite as rw
+
+        st = self.load_state(task_id)
+        if not by.is_human:
+            raise PermissionError("改写建议须由人工采纳")
+        self._require(by, Action.IR_PATCH, st.matter_id)
+        rec = next((r for r in st.options.get("rewrites", []) if r["rewrite_id"] == rewrite_id), None)
+        if rec is None or rec.get("status") != "pending":
+            raise KeyError(f"没有待采纳的改写：{rewrite_id}")
+        ps = self.store.load_model(task_id, f"rewrite_{rewrite_id}", PatchSet)
+        patches = ps.patches if ps else []
+        by_id = {p.patch_id: p for p in patches}
+        if patch_ids:
+            unknown = [x for x in patch_ids if x not in by_id]
+            if unknown:
+                raise KeyError(f"该次改写中没有这些建议：{'、'.join(unknown)}")
+            refused = [x for x in patch_ids if by_id[x].status == "rejected"]
+            if refused:
+                raise ValueError(f"经校验拒绝的改写不能采纳：{'、'.join(refused)}")
+            chosen = [by_id[x] for x in patch_ids]
+        else:
+            chosen = [p for p in patches if p.status == "proposed" or (include_flagged and p.status == "needs_human")]
+        ir = self.current_ir(st)
+        locked = {lk.sid for lk in rw.effective_locks(ir, st.options.get("sentence_locks", {}), st.options.get("model_locks", {})) if lk.locked} if ir else set()
+        skipped: list[str] = []
+        usable = []
+        for p in chosen:
+            found = ir.find_sentence(p.target) if ir else None
+            if found is None or found[1].text != p.before:
+                skipped.append(f"{p.patch_id}（句子已被修改，建议已过时）")
+            elif p.target in locked:
+                skipped.append(f"{p.patch_id}（句子现已锁定）")
+            else:
+                usable.append(p)
+        if not usable:
+            raise ValueError("没有可采纳的改写建议" + (f"：{'；'.join(skipped)}" if skipped else ""))
+        st = self.request_revision(task_id, by=by, rewrite_patches=usable)
+        rec = next(r for r in st.options.get("rewrites", []) if r["rewrite_id"] == rewrite_id)
+        rec.update({"status": "applied", "applied": [p.patch_id for p in usable], "skipped": skipped, "decided_by": by.id, "decided_at": utcnow().isoformat()})
+        self.log(task_id).append("rewrite.applied", {"rewrite_id": rewrite_id, "applied": [p.patch_id for p in usable], "skipped": len(skipped)}, actor=by.id, stage=st.stage.value)
+        self.save_state(st)
+        return {"rewrite_id": rewrite_id, "applied": [p.patch_id for p in usable], "skipped": skipped, "stage": st.stage.value, "version": st.current_version}
+
+    @_serialized
+    def discard_rewrite(self, task_id: str, rewrite_id: str, *, by: Principal) -> None:
+        st = self.load_state(task_id)
+        if not by.is_human:
+            raise PermissionError("改写建议须由人工处理")
+        self._require(by, Action.IR_PATCH, st.matter_id)
+        rec = next((r for r in st.options.get("rewrites", []) if r["rewrite_id"] == rewrite_id), None)
+        if rec is None or rec.get("status") != "pending":
+            raise KeyError(f"没有待处理的改写：{rewrite_id}")
+        rec.update({"status": "discarded", "decided_by": by.id, "decided_at": utcnow().isoformat()})
+        self.log(task_id).append("rewrite.discarded", {"rewrite_id": rewrite_id}, actor=by.id, stage=st.stage.value)
+        self.save_state(st)
 
     # ================================================================ 审批记录绑定
     @_serialized

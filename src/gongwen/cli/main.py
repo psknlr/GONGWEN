@@ -14,6 +14,7 @@ import argparse
 import getpass
 import json
 import os
+import re
 import shutil
 import sys
 import threading
@@ -380,6 +381,93 @@ def cmd_task_revise(args) -> int:
     eng.request_revision(args.task_id, by=user, instruction=args.instruction, edits=edits, fact_changes=facts)
     eng.advance(args.task_id, by=user)
     return _status_out(args, eng, args.task_id)
+
+
+def _split_ids(values) -> list[str]:
+    return [x for v in values or [] for x in re.split(r"[,，\s]+", v) if x]
+
+
+def _print_locks(locks: list[dict]) -> None:
+    src = {"auto": "规则", "model": "模型", "human": "人工"}
+    for lk in locks:
+        mark = "🔒" if lk["locked"] else "  "
+        why = f"［{src.get(lk['source'], lk['source'])}］{lk['reason']}" if lk["locked"] or lk["source"] == "human" else ""
+        print(f"{mark} {lk['sid']:<8} {lk['text'][:46]}{'…' if len(lk['text']) > 46 else ''}  {why}")
+    n = sum(lk["locked"] for lk in locks)
+    print(f"共 {len(locks)} 句：固定 {n} 句，可改写 {len(locks) - n} 句")
+
+
+def cmd_task_locks(args) -> int:
+    eng = make_engine(args)
+    user = human_user(args)
+    lock, unlock, reset = _split_ids(args.lock), _split_ids(args.unlock), _split_ids(args.reset)
+    notes: list[str] = []
+    if lock or unlock or reset:
+        locks = eng.set_sentence_locks(args.task_id, by=user, lock=lock, unlock=unlock, reset=reset, reason=args.reason or "")
+    else:
+        locks = eng.sentence_locks(args.task_id)
+    if args.ai:
+        r = eng.calibrate_locks(args.task_id, by=user, prompt=args.ai)
+        locks, notes = r["locks"], r["notes"]
+    if args.json:
+        print(json.dumps({"locks": locks, "notes": notes}, ensure_ascii=False, indent=2))
+        return EXIT_OK
+    _print_locks(locks)
+    for n in notes:
+        print(f"说明：{n}")
+    return EXIT_OK
+
+
+def _print_rewrite(r: dict) -> None:
+    label = {"proposed": "可采纳", "needs_human": "需人工确认", "rejected": "已拒绝"}
+    print(f"改写 {r['rewrite_id']}（第 {r['version']} 版；固定 {r['locked']} 句，可改写 {r['editable']} 句）：{r['status']}")
+    for p in r["patches"]:
+        print(f"\n[{label.get(p['status'], p['status'])}] {p['patch_id']}  {p['target']}")
+        print(f"  原：{p['before']}")
+        print(f"  改：{p['after'] or '（删除整句）'}")
+        print(f"  {p['reason']}")
+    for n in r.get("notes", []):
+        print(f"说明：{n}")
+    if r["status"] == "pending":
+        print(f"\n采纳：gongwen task rewrite-apply {{任务}} {r['rewrite_id']} [--patches PA-…] [--include-flagged]；放弃：gongwen task rewrite-discard {{任务}} {r['rewrite_id']}")
+
+
+def cmd_task_rewrite(args) -> int:
+    eng = make_engine(args)
+    user = human_user(args)
+    r = eng.rewrite(args.task_id, by=user, prompt=args.prompt, lock=_split_ids(args.lock), unlock=_split_ids(args.unlock), ai_calibrate=args.ai_calibrate)
+    if args.apply and r["status"] == "pending":
+        if any(p["status"] == "proposed" or (args.apply == "all" and p["status"] == "needs_human") for p in r["patches"]):
+            res = eng.apply_rewrite(args.task_id, r["rewrite_id"], by=user, include_flagged=args.apply == "all")
+            eng.advance(args.task_id, by=user)
+            r = {**eng.rewrite_result(args.task_id, r["rewrite_id"]), "applied_result": res}
+    if args.json:
+        print(json.dumps(r, ensure_ascii=False, indent=2, default=str))
+        return EXIT_OK
+    _print_rewrite(r)
+    if r.get("applied_result"):
+        a = r["applied_result"]
+        print(f"\n已采纳 {len(a['applied'])} 条，形成第 {eng.load_state(args.task_id).current_version} 版并重新审校" + (f"；跳过：{'；'.join(a['skipped'])}" if a["skipped"] else ""))
+    return EXIT_OK
+
+
+def cmd_task_rewrite_apply(args) -> int:
+    eng = make_engine(args)
+    user = human_user(args)
+    res = eng.apply_rewrite(args.task_id, args.rewrite_id, by=user, patch_ids=_split_ids(args.patches) or None, include_flagged=args.include_flagged)
+    eng.advance(args.task_id, by=user)
+    if args.json:
+        print(json.dumps(res, ensure_ascii=False, indent=2))
+        return EXIT_OK
+    print(f"已采纳 {len(res['applied'])} 条改写建议，形成第 {eng.load_state(args.task_id).current_version} 版并重新审校" + (f"；跳过：{'；'.join(res['skipped'])}" if res["skipped"] else ""))
+    return _status_out(args, eng, args.task_id)
+
+
+def cmd_task_rewrite_discard(args) -> int:
+    eng = make_engine(args)
+    eng.discard_rewrite(args.task_id, args.rewrite_id, by=human_user(args))
+    print(f"已放弃改写 {args.rewrite_id}，原稿未改动")
+    return EXIT_OK
 
 
 def cmd_task_proposals(args) -> int:
@@ -853,6 +941,35 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--reason")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_task_revise)
+    p = t.add_parser("locks", help="查看、锁定或解锁固定句（AI 改写不改动固定句）")
+    p.add_argument("task_id")
+    p.add_argument("--lock", action="append", help="锁定的句号（可逗号分隔、可重复）")
+    p.add_argument("--unlock", action="append", help="解除锁定的句号")
+    p.add_argument("--reset", action="append", help="恢复为系统标定的句号")
+    p.add_argument("--reason", help="锁定或解锁的理由")
+    p.add_argument("--ai", metavar="改写要求", help="按改写要求由模型补充标定固定句（只增不减）")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_task_locks)
+    p = t.add_parser("rewrite", help="结合改写要求重写未锁定的句子，形成待采纳的建议")
+    p.add_argument("task_id")
+    p.add_argument("-p", "--prompt", required=True, help="改写要求，如“语言更简洁，突出问题导向”")
+    p.add_argument("--lock", action="append", help="本次改写前锁定的句号")
+    p.add_argument("--unlock", action="append", help="本次改写前解除锁定的句号")
+    p.add_argument("--ai-calibrate", action="store_true", help="改写前由模型补充标定固定句")
+    p.add_argument("--apply", choices=["safe", "all"], help="生成后直接采纳：safe 只采纳校验通过的，all 另含需人工确认的（已拒绝的始终不采纳）")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_task_rewrite)
+    p = t.add_parser("rewrite-apply", help="采纳改写建议")
+    p.add_argument("task_id")
+    p.add_argument("rewrite_id")
+    p.add_argument("--patches", action="append", help="只采纳这些建议（逗号分隔）；缺省采纳全部校验通过的")
+    p.add_argument("--include-flagged", action="store_true", help="同时采纳需人工确认的建议")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_task_rewrite_apply)
+    p = t.add_parser("rewrite-discard", help="放弃改写建议")
+    p.add_argument("task_id")
+    p.add_argument("rewrite_id")
+    p.set_defaults(func=cmd_task_rewrite_discard)
     p = t.add_parser("proposals", help="待采纳的修改建议")
     p.add_argument("task_id")
     p.set_defaults(func=cmd_task_proposals)

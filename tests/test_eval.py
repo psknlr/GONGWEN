@@ -2,7 +2,7 @@
 
 from gongwen.eval import FLAGS, GROUPS, load_cases, run_case, summarize, variants
 
-KINDS = {"pipeline", "check", "admission", "revision", "model", "matter"}
+KINDS = {"pipeline", "check", "admission", "revision", "model", "matter", "rewrite"}
 
 
 def test_cases_are_well_formed():

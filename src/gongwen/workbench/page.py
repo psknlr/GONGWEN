@@ -53,6 +53,15 @@ del{background:#ffebee;color:#b71c1c;text-decoration:line-through} ins{backgroun
 .btn.primary{background:var(--accent);color:#fff;border-color:var(--accent)}
 textarea{width:100%;min-height:52px;font:inherit;border:1px solid var(--line);border-radius:6px;padding:6px;background:var(--panel);color:var(--ink)}
 .notice{font-size:12px;color:var(--muted);padding:8px 16px;text-align:center}
+.gw-doc span.s.locked{text-decoration:underline dotted #8a94a3;text-underline-offset:4px}
+.lockrow{display:grid;grid-template-columns:30px 1fr;gap:6px;align-items:start;border-bottom:1px solid var(--line);padding:6px 0}
+.lockbtn{border:1px solid var(--line);background:var(--panel);border-radius:6px;cursor:pointer;padding:2px 0;font-size:14px;line-height:1.4}
+.lockbtn.on{background:#fff4e5;border-color:#f3c98b}
+.lockrow .why{color:var(--muted);font-size:12px}
+.lockrow textarea{margin-top:4px}
+.pick{display:flex;gap:8px;align-items:flex-start}
+.pick input{margin-top:4px}
+label.inline{font-size:12px;color:var(--muted);display:inline-flex;gap:4px;align-items:center;margin-right:8px}
 """
 
 PAGE_JS = r"""
@@ -120,8 +129,62 @@ function renderLayout(){
   for(const c of L.checks){ const cls = c.status==='pass'?'ok':(c.status==='fail'?'bad':'warn'); h += `<div class="card"><h4>${esc(c.item)}<span class="st ${cls}">${esc(c.status)}</span></h4><div class="meta">要求：${esc(c.expected)}｜实际：${esc(c.actual)}</div><div class="meta">${esc(c.clause)}${c.conditional?'（条件性要求）':''} ${esc(c.note||'')}</div></div>`; }
   pane.innerHTML = h;
 }
+async function post(path, body){
+  const r = await fetch(D.api+path, {method:'POST', headers:{'Content-Type':'application/json','X-GW-Token':D.token}, body: JSON.stringify({task_id:D.task_id, ...body})});
+  let j = {}; try{ j = await r.json(); }catch(e){}
+  return {ok:r.ok, j};
+}
+function renderRewrite(){
+  const pane = $('#p-rewrite'); const locks = D.locks||[]; const R = D.rewrite; const live = !!D.api;
+  const srcName = {auto:'规则',model:'模型',human:'人工'};
+  const stName = {proposed:'可采纳',needs_human:'需人工确认',rejected:'已拒绝',applied:'已采纳'};
+  let h = '';
+  if(live){
+    h += `<div class="card"><h4>改写要求</h4><textarea id="rw-prompt" placeholder="如：语言更简洁有力，突出责任落实；不改变任务、时限和数据"></textarea>
+      <label class="inline"><input type="checkbox" id="rw-cal">改写前由 AI 标定固定句</label>
+      <div><button class="btn" id="rw-cal-only">AI 标定固定句</button><button class="btn primary" id="rw-go">生成改写建议</button></div>
+      <div class="meta">${D.model_ready?'已配置可用模型。':'未配置可用模型：AI 标定与改写不可用，仍可逐句锁定与人工修改。'}改写只形成建议，固定句一字不改；采纳后作为修订重新审校。</div></div>`;
+  } else {
+    h += '<div class="notice">离线页面只显示固定句与改写结果；锁定、改写与采纳请启动 <code>gongwen serve</code> 或使用 <code>gongwen task locks / rewrite</code>。</div>';
+  }
+  if(R){
+    h += `<div class="card"><h4>改写 ${esc(R.rewrite_id)}<span class="st">${esc({pending:'待采纳',empty:'无可用建议',applied:'已采纳',discarded:'已放弃'}[R.status]||R.status)}</span></h4><div class="meta">要求：${esc(R.prompt)}｜第 ${R.version} 版，固定 ${R.locked} 句，可改写 ${R.editable} 句</div>${(R.notes||[]).map(n=>`<div class="meta">说明：${esc(n)}</div>`).join('')}</div>`;
+    for(const p of R.patches||[]){
+      const cls = p.status==='rejected'?'blocking':(p.status==='needs_human'?'major':'info');
+      const can = live && R.status==='pending' && p.status!=='rejected';
+      h += `<div class="card ${cls}"><div class="pick">${can?`<input type="checkbox" data-patch="${esc(p.patch_id)}" ${p.status==='proposed'?'checked':''}>`:''}<div><h4 class="clickable" data-sid="${esc(p.target)}">${esc(p.patch_id)} · ${esc(p.target)} <span class="st">${esc(stName[p.status]||p.status)}</span></h4>
+        <div><del>${esc(p.before)}</del></div><div><ins>${esc(p.after||'（删除整句）')}</ins></div><div class="meta">${esc(p.reason)}</div></div></div></div>`;
+    }
+    if(live && R.status==='pending') h += `<div><button class="btn primary" id="rw-apply">采纳所选</button><button class="btn" id="rw-discard">放弃本次改写</button></div>`;
+  }
+  h += `<h4>逐句：固定句与人工修改</h4>`;
+  for(const lk of locks){
+    const why = lk.locked || lk.source==='human' ? `［${srcName[lk.source]||lk.source}］${lk.reason}` : '';
+    h += `<div class="lockrow"><button class="lockbtn ${lk.locked?'on':''}" ${live?'':'disabled'} title="${lk.locked?'解除锁定':'锁定为固定句'}" data-lock="${esc(lk.sid)}" data-on="${lk.locked?1:0}">${lk.locked?'🔒':'🔓'}</button>
+      <div><span class="clickable" data-sid="${esc(lk.sid)}">${esc(lk.sid)}　${esc(lk.text)}</span>${why?`<div class="why">${esc(why)}</div>`:''}
+      ${live?`<div><button class="btn" data-edit="${esc(lk.sid)}">修改</button>${lk.source==='human'?`<button class="btn" data-reset="${esc(lk.sid)}">恢复系统标定</button>`:''}</div>`:''}</div></div>`;
+  }
+  if(!locks.length) h += '<div class="empty">尚无正文句子。</div>';
+  pane.innerHTML = h;
+  $$('[data-sid].clickable', pane).forEach(x=>x.onclick=()=>focusSid(x.dataset.sid));
+  if(!live) return;
+  const prompt = ()=>($('#rw-prompt')||{}).value||'';
+  const busy = (b,on)=>{ if(b){ b.disabled=on; } };
+  $$('button[data-lock]', pane).forEach(b=>b.onclick=async()=>{ busy(b,true); const on=b.dataset.on==='1'; const {ok,j}=await post('/locks', on?{unlock:[b.dataset.lock]}:{lock:[b.dataset.lock]}); if(ok) location.reload(); else {alert(j.message||'处理失败'); busy(b,false);} });
+  $$('button[data-reset]', pane).forEach(b=>b.onclick=async()=>{ busy(b,true); const {ok,j}=await post('/locks', {reset:[b.dataset.reset]}); if(ok) location.reload(); else {alert(j.message||'处理失败'); busy(b,false);} });
+  $$('button[data-edit]', pane).forEach(b=>b.onclick=()=>{
+    const sid=b.dataset.edit; const lk=locks.find(x=>x.sid===sid); const box=b.parentElement;
+    box.innerHTML = `<textarea data-text="${esc(sid)}">${esc(lk.text)}</textarea><button class="btn primary" data-save="${esc(sid)}">保存修改</button>`;
+    $(`button[data-save="${sid}"]`, box).onclick=async(ev)=>{ const t=$(`textarea[data-text="${sid}"]`, box).value.trim(); if(!t){alert('句子不能为空');return;} busy(ev.target,true); const {ok,j}=await post('/revise', {edits:[{sid, text:t}]}); alert(j.message||(ok?'已提交':'处理失败')); if(ok) location.reload(); else busy(ev.target,false); };
+  });
+  const cal=$('#rw-cal-only'); if(cal) cal.onclick=async()=>{ if(!prompt().trim()){alert('请先填写改写要求');return;} busy(cal,true); const {ok,j}=await post('/locks/calibrate', {prompt:prompt()}); alert(j.message||(ok?'已标定':'处理失败')); if(ok) location.reload(); else busy(cal,false); };
+  const go=$('#rw-go'); if(go) go.onclick=async()=>{ if(!prompt().trim()){alert('请先填写改写要求');return;} busy(go,true); go.textContent='正在生成…'; const {ok,j}=await post('/rewrite', {prompt:prompt(), ai_calibrate:$('#rw-cal').checked}); alert(j.message||(ok?'已生成':'处理失败')); if(ok) location.reload(); else {busy(go,false); go.textContent='生成改写建议';} };
+  const ap=$('#rw-apply'); if(ap) ap.onclick=async()=>{ const ids=$$('input[data-patch]:checked', pane).map(x=>x.dataset.patch); if(!ids.length){alert('请先勾选要采纳的建议');return;} busy(ap,true); const {ok,j}=await post('/rewrite/apply', {rewrite_id:R.rewrite_id, patch_ids:ids}); alert(j.message||(ok?'已采纳':'处理失败')); if(ok) location.reload(); else busy(ap,false); };
+  const ds=$('#rw-discard'); if(ds) ds.onclick=async()=>{ busy(ds,true); const {ok,j}=await post('/rewrite/discard', {rewrite_id:R.rewrite_id}); alert(j.message||(ok?'已放弃':'处理失败')); if(ok) location.reload(); else busy(ds,false); };
+}
+(D.locks||[]).forEach(lk=>{ if(lk.locked){ const el=$(`.gw-doc span.s[data-sid="${lk.sid}"]`); if(el){ el.classList.add('locked'); el.title='固定句：'+lk.reason; } } });
 $$('.gw-doc span.s').forEach(s=>s.onclick=()=>showEvidence(s.dataset.sid));
-renderIssues(); renderPending(); renderVersions(); renderLayout();
+renderIssues(); renderPending(); renderVersions(); renderLayout(); renderRewrite();
 $('#p-evidence').innerHTML = '<div class="empty">点击正文中的句子，查看其来源、计算公式、适用条件和确认状态。</div>';
 """
 
@@ -153,8 +216,8 @@ def build_page(ir: DocumentIR, data: dict[str, Any], api: str | None = None, tok
 <span class="counts"><span>第 {ir.version} 版</span><span>{html.escape(data.get('genre') or '')}</span></span></header>
 <div class="notice">本页为附带可核验证据包的草稿：系统不形成审批结论；成文日期、发文字号与签发信息须来自真实办理流程。</div>
 <main><section class="doc-wrap">{doc_html}</section>
-<aside><nav class="tabs"><button data-t="evidence" class="on">证据</button><button data-t="issues">问题</button><button data-t="pending">待确认</button><button data-t="versions">修改记录</button><button data-t="layout">版式</button></nav>
-<div class="pane on" id="p-evidence"></div><div class="pane" id="p-issues"></div><div class="pane" id="p-pending"></div><div class="pane" id="p-versions"></div><div class="pane" id="p-layout"></div></aside></main>
+<aside><nav class="tabs"><button data-t="evidence" class="on">证据</button><button data-t="issues">问题</button><button data-t="pending">待确认</button><button data-t="versions">修改记录</button><button data-t="rewrite">改写</button><button data-t="layout">版式</button></nav>
+<div class="pane on" id="p-evidence"></div><div class="pane" id="p-issues"></div><div class="pane" id="p-pending"></div><div class="pane" id="p-versions"></div><div class="pane" id="p-rewrite"></div><div class="pane" id="p-layout"></div></aside></main>
 <script type="application/json" id="gw-data">{payload}</script>
 <script>{PAGE_JS}</script>
 </body></html>"""

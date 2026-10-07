@@ -729,6 +729,11 @@ class DraftingSkill(Skill):
                     break
                 new_sents.append(Sentence(sid=d.ids.next("s"), text=text, refs=[EvidenceRef(kind=allowed[r], id=r) for r in refs], function=b.sentences[0].function if b.sentences else "", measure_id=next((r for r in refs if allowed[r] == "measure"), None), origin="model"))
             if ok and new_sents:
+                # 事由中的数字（如年份）来自经确认的办文需求：模型润色后的句子保留这一来源，不能变成无来源数字句
+                task_refs = list({r.id: r for sent in b.sentences for r in sent.refs if r.kind == "task"}.values())
+                for ns in new_sents:
+                    if task_refs and re.search(r"\d", ns.text) and not ns.refs:
+                        ns.refs = list(task_refs)
                 b.sentences = new_sents
                 accepted += 1
         ir.meta["drafter"] = "model+validator" if accepted else "deterministic"
