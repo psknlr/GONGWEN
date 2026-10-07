@@ -237,3 +237,83 @@ def test_workbench_rewrite_tab_renders_and_locks_in_browser(live):
         assert page.locator(f".gw-doc span.s.locked[data-sid='{duty}']").count() == 1
         browser.close()
     assert not errors, errors
+
+
+# ------------------------------------------------------------------ 回读 Word 修改稿
+def _docx_of(eng, tid):
+    from pathlib import Path
+
+    from gongwen.schemas.layout import LayoutReport
+
+    rep = eng.store.load_model(tid, "layout_report", LayoutReport)
+    return Path(next(o.path for o in rep.outputs if o.kind == "docx"))
+
+
+def _edited_docx(src, replace: dict[str, str]) -> bytes:
+    from io import BytesIO
+
+    from docx import Document
+
+    doc = Document(str(src))
+    for p in doc.paragraphs:
+        t = p.text
+        for old, new in replace.items():
+            if old in t:
+                t = t.replace(old, new)
+        if t != p.text:
+            for r in p.runs[1:]:
+                r.text = ""
+            p.runs[0].text = t
+    buf = BytesIO()
+    doc.save(buf)
+    return buf.getvalue()
+
+
+def test_unchanged_docx_round_trips_without_differences(tmp_path):
+    eng, user, tid = _task(tmp_path, model=None)
+    src = _docx_of(eng, tid)
+    diff = eng.compare_edited(tid, src.name, src.read_bytes())
+    assert diff["edits"] == [] and diff["deletes"] == [] and diff["notes"] == []
+    res = eng.import_edited(tid, src.name, src.read_bytes(), by=default_user("tester"))
+    assert res["applied"] is False
+
+
+def test_edited_docx_becomes_human_revision(tmp_path):
+    eng, user, tid = _task(tmp_path, model=None)
+    v0 = eng.load_state(tid).current_version
+    src = _docx_of(eng, tid)
+    data = _edited_docx(
+        src,
+        {
+            "市卫生健康委负责统筹协调和技术指导。": "市卫生健康委负责统筹协调、技术指导和督促检查。请各区高度重视。",
+            "各区卫生健康局要在2026年6月底前完成选址。": "",
+            "基层医疗示范点建设工作的通知": "基层医疗示范点建设推进工作的通知",  # 标题第二行
+        },
+    )
+    diff = eng.compare_edited(tid, "修改稿.docx", data)
+    assert [d["before"] for d in diff["deletes"]] == ["各区卫生健康局要在2026年6月底前完成选址。"]
+    assert len(diff["edits"]) == 1 and diff["edits"][0]["text"] == "市卫生健康委负责统筹协调、技术指导和督促检查。请各区高度重视。"
+    assert any("标题有改动" in n for n in diff["notes"])  # 标题不自动采用
+    res = eng.import_edited(tid, "修改稿.docx", data, by=user)
+    assert res["applied"]
+    st = eng.advance(tid, by=user, auto_accept={"review_escalation"})
+    ir = eng.current_ir(st)
+    assert ir.version == v0 + 1 and ir.meta["summary"] == "导入人工修改稿"
+    text = ir.full_text()
+    assert "督促检查" in text and "6月底前完成选址" not in text
+    assert "推进工作" not in ir.title
+    assert all(b.sentences or b.kind != "paragraph" for b in ir.blocks)  # 删空的段落不留空行
+
+
+def test_workbench_import_route_validates_input(live):
+    import base64
+
+    eng, tid, base, token = live
+    src = _docx_of(eng, tid)
+    data = base64.b64encode(_edited_docx(src, {"市卫生健康委负责统筹协调和技术指导。": "市卫生健康委负责统筹协调。"})).decode()
+    assert _post(base + "/api/import-edited", {"task_id": tid, "filename": "a.exe", "data_b64": data}, token)[0] == 400
+    assert _post(base + "/api/import-edited", {"task_id": tid, "filename": "a.docx", "data_b64": "@@@"}, token)[0] == 400
+    code, j = _post(base + "/api/import-edited", {"task_id": tid, "filename": "a.docx", "data_b64": data}, token)
+    assert code == 200 and len(j["edits"]) == 1 and eng.load_state(tid).current_version == j["version"]
+    code, j = _post(base + "/api/import-edited", {"task_id": tid, "filename": "a.docx", "data_b64": data, "apply": True}, token)
+    assert code == 200 and j["applied"] and "统筹协调。" in eng.current_ir(eng.load_state(tid)).full_text()

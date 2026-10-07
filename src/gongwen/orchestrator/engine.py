@@ -37,7 +37,7 @@ from ..schemas.ir import DocumentIR
 from ..schemas.layout import LayoutReport
 from ..schemas.outline import OutlinePlan
 from ..schemas.package import ReviewPackage
-from ..schemas.patch import FactChange, PatchSet
+from ..schemas.patch import FactChange, Patch, PatchSet
 from ..schemas.policy import PolicyPack
 from ..schemas.review import ReviewReport
 from ..schemas.sources import AdmissionResult, Material, SourceBundle
@@ -953,12 +953,12 @@ class Engine:
 
     # ================================================================ 修订请求（人工发起）
     @_serialized
-    def request_revision(self, task_id: str, *, by: Principal, instruction: str | None = None, edits: list[dict] | None = None, fact_changes: list[dict] | None = None, rewrite_patches: list | None = None) -> TaskState:
+    def request_revision(self, task_id: str, *, by: Principal, instruction: str | None = None, edits: list[dict] | None = None, fact_changes: list[dict] | None = None, rewrite_patches: list | None = None, deletes: list[str] | None = None, summary: str = "") -> TaskState:
         st = self.load_state(task_id)
         if not by.is_human:
             raise PermissionError("修订请求须由人发起")
         self._require(by, Action.IR_PATCH, st.matter_id)
-        data = {"instruction": instruction, "edits": edits or [], "fact_changes": fact_changes or [], "rewrite_patches": rewrite_patches or []}
+        data = {"instruction": instruction, "edits": edits or [], "fact_changes": fact_changes or [], "rewrite_patches": rewrite_patches or [], "deletes": deletes or [], "summary": summary}
         self._check_revision(st, data)
         log = self.log(task_id)
         for cp in st.pending_checkpoints():
@@ -978,7 +978,10 @@ class Engine:
         edits = data.get("edits") or []
         if not isinstance(edits, list) or not all(isinstance(e, dict) and isinstance(e.get("sid"), str) and isinstance(e.get("text"), str) for e in edits):
             raise ValueError("edits 须为 [{sid, text}] 列表")
-        missing = [e["sid"] for e in edits if ir.find_sentence(e["sid"]) is None]
+        deletes = data.get("deletes") or []
+        if not isinstance(deletes, list) or not all(isinstance(x, str) for x in deletes):
+            raise ValueError("deletes 须为句号列表")
+        missing = [e["sid"] for e in edits if ir.find_sentence(e["sid"]) is None] + [x for x in deletes if ir.find_sentence(x) is None]
         if missing:
             raise KeyError(f"句子不存在：{'、'.join(missing)}")
         changes = data.get("fact_changes") or []
@@ -1027,6 +1030,14 @@ class Engine:
             work = skill.apply(sc, work, ps)
             work.version = ir.version
             combined.patches += ps.patches
+        if data.get("deletes"):
+            ps = PatchSet(doc_id=work.doc_id, round=rnd, from_version=ir.version)
+            for sid in data["deletes"]:
+                found = work.find_sentence(sid)
+                ps.patches.append(Patch(patch_id=sc.ids.next("PA"), doc_id=work.doc_id, target=sid, op="delete", before=found[1].text if found else "", reason=f"人工删除（{by.id}）", author="human", status="proposed"))
+            work = skill.apply(sc, work, ps)
+            work.version = ir.version
+            combined.patches += ps.patches
         rewrite_ps = data.get("rewrite_patches") or []
         if rewrite_ps:
             # 人工采纳的 AI 改写：作者记为“模型（人工采纳）”，句子来源标为修订，便于追溯
@@ -1044,7 +1055,8 @@ class Engine:
         new.version = ir.version + 1
         new.based_on_version = ir.version
         new.status = DocStatus.DISCUSSION
-        new.meta.update({"created_at": utcnow().isoformat(), "author": by.id, "summary": ("采纳 AI 改写建议" if rewrite_ps and not (data.get("edits") or data.get("instruction")) else "人工发起的修订") + ("（含关键事实变更）" if data.get("fact_changes") else "")})
+        summary = data.get("summary") or ("采纳 AI 改写建议" if rewrite_ps and not (data.get("edits") or data.get("instruction")) else "人工发起的修订")
+        new.meta.update({"created_at": utcnow().isoformat(), "author": by.id, "summary": summary + ("（含关键事实变更）" if data.get("fact_changes") else "")})
         combined.to_version = new.version
         self.store.save_version(st.task_id, new.doc_id, new.version, new)
         st.current_version = new.version
@@ -1388,6 +1400,87 @@ class Engine:
         rec.update({"status": "discarded", "decided_by": by.id, "decided_at": utcnow().isoformat()})
         self.log(task_id).append("rewrite.discarded", {"rewrite_id": rewrite_id}, actor=by.id, stage=st.stage.value)
         self.save_state(st)
+
+    # ================================================================ 回读人工修改稿（Word 等）
+    def compare_edited(self, task_id: str, filename: str, data: bytes) -> dict[str, Any]:
+        """把在 Word 等软件中修改后的稿件与当前版本逐句对齐，列出改写、删除和新增的句子（只比对，不改稿）。
+
+        新增的句子并入相邻句（文稿结构由提纲确定，不在回读时新增段落）；标题、层次标题、主送、落款、
+        附件与表格的改动不自动采用，只列出提示，须在任务中另行修改。
+        """
+        from difflib import SequenceMatcher
+
+        from ..importer import ir_from_file
+        from ..skills import rewrite as rw
+
+        st = self.load_state(task_id)
+        ir = self.current_ir(st)
+        if ir is None:
+            raise ValueError("尚未形成文稿")
+        imp = ir_from_file(filename, data, genre=ir.genre or ir.material_type)
+        cur = [(s.sid, s.text) for _, s in rw.body_sentences(ir)]
+        new = [s.text for _, s in imp.iter_sentences(include_attachments=False)]
+        tail = {t for t in [*ir.signature.organs, ir.signature.date] if t}
+        while new and new[-1] in tail:  # 未能识别为落款的署名、日期
+            new.pop()
+
+        def norm(t: str) -> str:
+            return re.sub(r"\s+", "", t)
+
+        edits: dict[str, str] = {}
+        deletes: list[str] = []
+        sm = SequenceMatcher(a=[norm(t) for _, t in cur], b=[norm(t) for t in new], autojunk=False)
+        for op, i1, i2, j1, j2 in sm.get_opcodes():
+            old, add = cur[i1:i2], new[j1:j2]
+            if op == "replace":
+                for k, (sid, t) in enumerate(old):
+                    if k >= len(add):
+                        deletes.append(sid)
+                        continue
+                    text = "".join(add[k:]) if k == len(old) - 1 else add[k]  # 多出来的新句并入最后一句
+                    if norm(text) != norm(t):
+                        edits[sid] = text
+            elif op == "delete":
+                deletes += [sid for sid, _ in old]
+            elif op == "insert" and cur:
+                if i1 > 0:  # 新增句并入前一句；文首新增并入第一句
+                    sid, t = cur[i1 - 1]
+                    edits[sid] = edits.get(sid, t) + "".join(add)
+                else:
+                    sid, t = cur[0]
+                    edits[sid] = "".join(add) + edits.get(sid, t)
+        texts = dict(cur)
+        notes: list[str] = []
+        if norm(imp.title) and norm(imp.title) != norm(ir.title):
+            notes.append(f"标题有改动（“{imp.title}”）：未自动采用，标题须在任务中修改")
+        heads = lambda x: [f"{b.label}{b.heading}" for b in x.blocks if b.kind == "heading" and b.heading]  # noqa: E731
+        if heads(imp) != heads(ir):
+            notes.append("层次标题有改动：未自动采用，请在任务中修改")
+        if imp.recipients and [norm(r) for r in imp.recipients] != [norm(r) for r in ir.recipients]:
+            notes.append(f"主送机关有改动（{'、'.join(imp.recipients)}）：未自动采用")
+        if any(b.kind == "table" for b in imp.blocks) or imp.attachments:
+            notes.append("表格与附件的改动不自动导入，请核对")
+        if imp.meta.get("import_warnings"):
+            notes.append(f"读取提示：{imp.meta['import_warnings']}")
+        return {
+            "edits": [{"sid": sid, "before": texts[sid], "text": t} for sid, t in edits.items()],
+            "deletes": [{"sid": sid, "before": texts[sid]} for sid in deletes],
+            "unchanged": len(cur) - len(edits) - len(deletes),
+            "notes": notes,
+            "version": ir.version,
+        }
+
+    @_serialized
+    def import_edited(self, task_id: str, filename: str, data: bytes, *, by: Principal) -> dict[str, Any]:
+        """把人工修改稿中的句子改动作为人工修订提交：形成新版本并重新审校（修改中的语义变化照常检查）。"""
+        if not by.is_human:
+            raise PermissionError("修改稿须由人导入")
+        diff = self.compare_edited(task_id, filename, data)
+        if not diff["edits"] and not diff["deletes"]:
+            return {**diff, "applied": False}
+        st = self.request_revision(task_id, by=by, edits=[{"sid": e["sid"], "text": e["text"]} for e in diff["edits"]], deletes=[d["sid"] for d in diff["deletes"]], summary="导入人工修改稿")
+        self.log(task_id).append("revision.imported", {"filename_sha256": sha256_text(filename), "edits": len(diff["edits"]), "deletes": len(diff["deletes"]), "from_version": diff["version"]}, actor=by.id, stage=st.stage.value)
+        return {**diff, "applied": True, "stage": st.stage.value}
 
     # ================================================================ 审批记录绑定
     @_serialized

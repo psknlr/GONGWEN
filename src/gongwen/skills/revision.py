@@ -237,6 +237,12 @@ class RevisionSkill(Skill):
             if p.before and s.text != p.before:
                 return False
             b.sentences.remove(s)
+            if b.kind == "paragraph" and not b.sentences:  # 整段删空：去掉空段，不留空行
+                for blocks in [ir.blocks] + [a.blocks for a in ir.attachments]:
+                    idx = next((i for i, x in enumerate(blocks) if x is b), None)  # 按对象而非内容匹配
+                    if idx is not None:
+                        del blocks[idx]
+                        break
             return True
         if p.op == "set_label":
             b = ir.find_block(p.target)

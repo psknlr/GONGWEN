@@ -470,6 +470,33 @@ def cmd_task_rewrite_discard(args) -> int:
     return EXIT_OK
 
 
+def cmd_task_import_edited(args) -> int:
+    eng = make_engine(args)
+    path = Path(args.file)
+    if not path.is_file():
+        raise FileNotFoundError(f"文件不存在：{path}")
+    data = path.read_bytes()
+    user = human_user(args)
+    res = eng.import_edited(args.task_id, path.name, data, by=user) if args.apply else eng.compare_edited(args.task_id, path.name, data)
+    if res.get("applied"):
+        eng.advance(args.task_id, by=user)
+    if args.json:
+        print(json.dumps(res, ensure_ascii=False, indent=2))
+        return EXIT_OK
+    print(f"与第 {res['version']} 版比对：改动 {len(res['edits'])} 句，删除 {len(res['deletes'])} 句，未改动 {res['unchanged']} 句")
+    for e in res["edits"]:
+        print(f"\n[改动] {e['sid']}\n  原：{e['before']}\n  新：{e['text']}")
+    for d in res["deletes"]:
+        print(f"\n[删除] {d['sid']}\n  原：{d['before']}")
+    for n in res["notes"]:
+        print(f"说明：{n}")
+    if res.get("applied"):
+        print(f"\n已作为人工修订提交，形成第 {eng.load_state(args.task_id).current_version} 版并重新审校")
+    elif res["edits"] or res["deletes"]:
+        print("\n确认无误后加 --apply 提交为人工修订（修改中的语义变化仍会经独立审校检查）")
+    return EXIT_OK
+
+
 def cmd_task_proposals(args) -> int:
     print(_commands(args).run("/proposals"))
     return EXIT_OK
@@ -970,6 +997,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("task_id")
     p.add_argument("rewrite_id")
     p.set_defaults(func=cmd_task_rewrite_discard)
+    p = t.add_parser("import-edited", help="回读在 Word 等中修改后的稿件：逐句比对，确认后作为人工修订提交")
+    p.add_argument("task_id")
+    p.add_argument("file", help="修改后的 .docx / .txt / .md / 带文字层的 .pdf")
+    p.add_argument("--apply", action="store_true", help="提交为人工修订（缺省只比对）")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_task_import_edited)
     p = t.add_parser("proposals", help="待采纳的修改建议")
     p.add_argument("task_id")
     p.set_defaults(func=cmd_task_proposals)

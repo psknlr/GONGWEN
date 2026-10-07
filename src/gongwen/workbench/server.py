@@ -8,6 +8,8 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 import html
 import json
 import secrets
@@ -185,6 +187,22 @@ def make_handler(engine: Engine, user: Principal, token: str):
                 if path == "/api/rewrite/discard":
                     engine.discard_rewrite(body["task_id"], _str(body.get("rewrite_id"), "rewrite_id"), by=user)
                     return self._json(200, {"message": "已放弃本次改写，原稿未改动"})
+                if path == "/api/import-edited":
+                    name = _str(body.get("filename"), "filename")
+                    if not name.lower().endswith((".docx", ".txt", ".md", ".pdf")):
+                        raise ValueError("只支持 .docx、.txt、.md 或带文字层的 .pdf")
+                    try:
+                        raw = base64.b64decode(_str(body.get("data_b64"), "data_b64"), validate=True)
+                    except (binascii.Error, ValueError) as exc:
+                        raise ValueError("文件内容不是有效的 base64") from exc
+                    if body.get("apply"):
+                        res = engine.import_edited(body["task_id"], name, raw, by=user)
+                        if res.get("applied"):
+                            st = engine.advance(body["task_id"], by=user)
+                            res["stage"] = st.stage.value
+                    else:
+                        res = engine.compare_edited(body["task_id"], name, raw)
+                    return self._json(200, res)
                 if path == "/api/revise":
                     engine.request_revision(body["task_id"], by=user, instruction=body.get("instruction"), edits=body.get("edits"), fact_changes=body.get("fact_changes"))
                     st = engine.advance(body["task_id"], by=user)

@@ -157,6 +157,7 @@ function renderRewrite(){
     }
     if(live && R.status==='pending') h += `<div><button class="btn primary" id="rw-apply">采纳所选</button><button class="btn" id="rw-discard">放弃本次改写</button></div>`;
   }
+  if(live) h += `<div class="card"><h4>回读 Word 修改稿</h4><div class="meta">在 Word 中修改导出的 .docx 后上传：逐句比对，确认后作为人工修订提交并重新审校。</div><input type="file" id="im-file" accept=".docx,.txt,.md,.pdf"><div id="im-out"></div></div>`;
   h += `<h4>逐句：固定句与人工修改</h4>`;
   for(const lk of locks){
     const why = lk.locked || lk.source==='human' ? `［${srcName[lk.source]||lk.source}］${lk.reason}` : '';
@@ -177,6 +178,20 @@ function renderRewrite(){
     box.innerHTML = `<textarea data-text="${esc(sid)}">${esc(lk.text)}</textarea><button class="btn primary" data-save="${esc(sid)}">保存修改</button>`;
     $(`button[data-save="${sid}"]`, box).onclick=async(ev)=>{ const t=$(`textarea[data-text="${sid}"]`, box).value.trim(); if(!t){alert('句子不能为空');return;} busy(ev.target,true); const {ok,j}=await post('/revise', {edits:[{sid, text:t}]}); alert(j.message||(ok?'已提交':'处理失败')); if(ok) location.reload(); else busy(ev.target,false); };
   });
+  const fin=$('#im-file'); if(fin) fin.onchange=async()=>{
+    const f=fin.files[0]; if(!f) return; if(f.size>700000){alert('文件过大（不超过 700KB）');return;}
+    const b64 = await new Promise((ok,bad)=>{ const r=new FileReader(); r.onload=()=>ok(String(r.result).split(',')[1]||''); r.onerror=bad; r.readAsDataURL(f); });
+    const out=$('#im-out'); out.innerHTML='<div class="meta">正在比对…</div>';
+    const {ok,j}=await post('/import-edited', {filename:f.name, data_b64:b64});
+    if(!ok){ out.innerHTML=`<div class="meta">${esc(j.message||'比对失败')}</div>`; return; }
+    let x = `<div class="meta">与第 ${j.version} 版比对：改动 ${j.edits.length} 句，删除 ${j.deletes.length} 句，未改动 ${j.unchanged} 句</div>`;
+    x += j.edits.map(e=>`<div class="card"><h4 class="clickable" data-sid="${esc(e.sid)}">${esc(e.sid)} 改动</h4><div><del>${esc(e.before)}</del></div><div><ins>${esc(e.text)}</ins></div></div>`).join('');
+    x += j.deletes.map(d=>`<div class="card"><h4 class="clickable" data-sid="${esc(d.sid)}">${esc(d.sid)} 删除</h4><div><del>${esc(d.before)}</del></div></div>`).join('');
+    x += (j.notes||[]).map(n=>`<div class="meta">说明：${esc(n)}</div>`).join('');
+    if(j.edits.length||j.deletes.length) x += '<button class="btn primary" id="im-apply">提交为人工修订</button>';
+    out.innerHTML = x; $$('[data-sid].clickable', out).forEach(e=>e.onclick=()=>focusSid(e.dataset.sid));
+    const ap=$('#im-apply'); if(ap) ap.onclick=async()=>{ busy(ap,true); const r2=await post('/import-edited', {filename:f.name, data_b64:b64, apply:true}); alert(r2.j.message||(r2.ok?'已提交，当前阶段：'+(r2.j.stage||''):'处理失败')); if(r2.ok) location.reload(); else busy(ap,false); };
+  };
   const cal=$('#rw-cal-only'); if(cal) cal.onclick=async()=>{ if(!prompt().trim()){alert('请先填写改写要求');return;} busy(cal,true); const {ok,j}=await post('/locks/calibrate', {prompt:prompt()}); alert(j.message||(ok?'已标定':'处理失败')); if(ok) location.reload(); else busy(cal,false); };
   const go=$('#rw-go'); if(go) go.onclick=async()=>{ if(!prompt().trim()){alert('请先填写改写要求');return;} busy(go,true); go.textContent='正在生成…'; const {ok,j}=await post('/rewrite', {prompt:prompt(), ai_calibrate:$('#rw-cal').checked}); alert(j.message||(ok?'已生成':'处理失败')); if(ok) location.reload(); else {busy(go,false); go.textContent='生成改写建议';} };
   const ap=$('#rw-apply'); if(ap) ap.onclick=async()=>{ const ids=$$('input[data-patch]:checked', pane).map(x=>x.dataset.patch); if(!ids.length){alert('请先勾选要采纳的建议');return;} busy(ap,true); const {ok,j}=await post('/rewrite/apply', {rewrite_id:R.rewrite_id, patch_ids:ids}); alert(j.message||(ok?'已采纳':'处理失败')); if(ok) location.reload(); else busy(ap,false); };

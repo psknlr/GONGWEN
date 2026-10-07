@@ -47,6 +47,7 @@ gongwen serve --open                         # 本地审阅工作台（仅本机
 gongwen task revise <任务> --fact F-00x=40   # 关键数据变更：联动正文、合计与附件
 gongwen task locks <任务>                    # 固定句：规则与模型标定，人工可锁定、解锁
 gongwen task rewrite <任务> -p "语言更简洁有力"  # 按提示词改写未锁定的句子，校验后逐条采纳
+gongwen task import-edited <任务> 修改稿.docx    # 回读在 Word 中修改的稿件，逐句比对后作为人工修订提交
 ```
 
 改写只形成建议：固定句一字不改，新增数字、时限、文件标题、审批说法的改写一律拒绝，弱化义务等语义变化转人工确认；采纳后作为修订重新审校。见 [`docs/rewrite.md`](docs/rewrite.md)。

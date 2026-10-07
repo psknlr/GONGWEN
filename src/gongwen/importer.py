@@ -27,10 +27,12 @@ LEVELS = [
     (3, re.compile(r"^(\d{1,2}\.)(?!\d)(.*)$")),
     (4, re.compile(r"^(（\d{1,2}）)(.*)$")),
 ]
-DATE_LINE = re.compile(r"^(\d{4}年\d{1,2}月\d{1,2}日|[〇○零一二三四五六七八九]{4}年[一二三四五六七八九十]{1,3}月[一二三四五六七八九十]{1,3}日)$")
+# 含本系统排版稿中成文日期的待填占位（如“【待签发后填写成文日期】”），使回读本系统输出的稿件时能识别落款
+DATE_LINE = re.compile(r"^(\d{4}年\d{1,2}月\d{1,2}日|[〇○零一二三四五六七八九]{4}年[一二三四五六七八九十]{1,3}月[一二三四五六七八九十]{1,3}日|【待[^】]*成文日期[^】]*】)$")
 ATT_NOTE = re.compile(r"^附件[：:]\s*(.*)$")
 ATT_ITEM = re.compile(r"^(\d{1,2})[.．、]\s*(.+)$")
 ATT_HEAD = re.compile(r"^附件\s*(\d{0,2})$")
+_IMPRINT_CELL = re.compile(r"印发|抄送|主送")
 PRINT_LINE = re.compile(r"^(.+?)\s+(\d{4}年\d{1,2}月\d{1,2}日)\s*印发$")
 SECRECY = re.compile(r"(绝密|机密|秘密)(★.*)?$")
 URGENCY = {"特急", "加急", "特提", "平急"}
@@ -183,6 +185,20 @@ def ir_from_text(text: str, *, doc_id: str = "EXT", genre: str | None = None, di
 
     # ---- 从尾部识别版记、附件正文、附注、署名与日期
     imprint = Imprint(print_date="")
+    # 版记排成表格时（本系统与多数模板的版记都用表格对齐）：按单元格识别抄送、印发机关与印发日期
+    while rest and rest[-1].startswith("|") and _IMPRINT_CELL.search(rest[-1]):
+        cells = [c.strip() for c in re.split(r"[|\t]", rest.pop()) if c.strip()]
+        for c in cells:
+            if c.startswith(("抄送", "主送")):
+                names = [x for x in re.split(r"[，、,]", c.split("：", 1)[-1].split(":", 1)[-1].rstrip("。")) if x.strip()]
+                if c.startswith("抄送"):
+                    imprint.cc = names
+                else:
+                    imprint.main_moved = names
+            elif re.search(r"\d{4}年\d{1,2}月\d{1,2}日\s*印发$|【待[^】]*印发[^】]*】", c) and not re.search(r"机关", c):
+                imprint.print_date = c
+            else:
+                imprint.printer = c
     while rest and (PRINT_LINE.match(rest[-1]) or rest[-1].startswith(("抄送", "主送"))):
         last = rest.pop()
         m = PRINT_LINE.match(last)
