@@ -180,7 +180,12 @@ def preview_docx(docx: Path, out_dir: Path, report: LayoutReport | None, profile
     pdf = None
     notes: list[str] = []
     rendered_pdf = Path(report.render.pdf_path) if report and report.render.pdf_path else None
-    if rendered_pdf and rendered_pdf.is_file() and rendered_pdf.stat().st_mtime >= Path(docx).stat().st_mtime and shutil.which("pdftoppm"):
+    fresh = bool(rendered_pdf and rendered_pdf.is_file() and rendered_pdf.stat().st_mtime >= Path(docx).stat().st_mtime)
+    if fresh and report.render.font_env != gwfonts.env_fingerprint(profile.data.get("fonts"), enabled=font_substitution):
+        # 渲染之后字体环境已变（安装了字库、开关了替代映射，或早于字体指纹的旧排版结果）：重新渲染，页面以当前环境为准
+        fresh = False
+        notes.append("排版时的字体环境与当前不同，已按当前字体环境重新渲染；排版核验结果仍为排版时的结论")
+    if fresh and shutil.which("pdftoppm"):
         # 排版检查时已渲染过同一份 DOCX：直接栅格化该 PDF，页面与核验结果一致
         pdf = rendered_pdf
         pages = rasterize(pdf, out_dir / "pages", dpi)

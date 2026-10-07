@@ -256,6 +256,23 @@ def _env(extra: dict[str, str] | None) -> dict[str, str] | None:
     return {**os.environ, **extra} if extra else None
 
 
+def env_fingerprint(profile_fonts: dict[str, Any] | None, enabled: bool = True) -> str:
+    """字体环境指纹：各类字库名在渲染时实际匹配到的字体文件（含替代映射）。
+
+    已渲染的 PDF 只在指纹相同时复用：之后安装了授权字库、开关了替代映射或换了模板字库名，都须重新渲染。"""
+    import hashlib
+
+    fonts_ = profile_fonts or {}
+    parts = [f"map={int(enabled)}"]
+    with render_env(fonts_, enabled=enabled) as extra:
+        env = _env(extra)
+        for role in ROLES:
+            name = (fonts_.get(role) or {}).get("name", "")
+            face = fc_match(name, env) if name else None
+            parts.append(f"{role}:{name}->{face.file if face else '-'}")
+    return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()[:16]
+
+
 def open_substitute(face: FontFace | None, role: str | None) -> Substitute | None:
     if face is None:
         return None

@@ -73,6 +73,28 @@ def test_preview_task_renders_current_docx(tmp_path, capsys):
     assert cli(["-C", str(tmp_path), "preview", "T-不存在"]) == 2
 
 
+@needs_render
+def test_preview_rerenders_when_font_environment_changed(tmp_path, capsys):
+    """排版时已渲染的 PDF 只在字体环境指纹一致时复用：早于指纹的旧结果、此后安装了字库或开关了替代映射都要重新渲染。"""
+    from gongwen.layout import fonts
+    from gongwen.schemas.layout import LayoutReport
+
+    assert fonts.env_fingerprint(None, enabled=True) != fonts.env_fingerprint(None, enabled=False)
+    eng = make_engine(tmp_path, render=True)
+    user = default_user()
+    st = run_to_review(eng, user, start(eng, user).task_id)
+    rep = eng.store.load_model(st.task_id, "layout_report", LayoutReport)
+    assert rep.render.rendered and rep.render.font_env
+    assert cli(["-C", str(tmp_path), "preview", st.task_id, "--json"]) == 0
+    d = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert d["pdf"] == rep.render.pdf_path and not any("重新渲染" in n for n in d["notes"])  # 环境未变：复用排版时的 PDF
+    rep.render.font_env = "stale"
+    eng.store.save_model(st.task_id, "layout_report", rep)
+    assert cli(["-C", str(tmp_path), "preview", st.task_id, "--json"]) == 0
+    d = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert d["pdf"] != rep.render.pdf_path and any("重新渲染" in n for n in d["notes"])
+
+
 # ------------------------------------------------------------------ 工作台
 @pytest.fixture()
 def server(tmp_path):

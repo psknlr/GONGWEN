@@ -389,6 +389,7 @@ def check_rendering(docx: Path, ir: DocumentIR, profile: LayoutProfile, fonts_re
         # ---- 字体：缺失与替代（以 PDF 实际嵌入的字体为准）
         info.substitutions = font_substitutions(fonts_requested, profile, info.fonts_embedded, fc_env)
     info.renderer = libreoffice_version()
+    info.font_env = gwfonts.env_fingerprint(profile.data.get("fonts"), enabled=font_substitution)
     info.rendered = True
     info.pdf_path = str(pdf)
     pages = pdf_pages(pdf)

@@ -29,6 +29,7 @@ class RenderInfo(GWModel):
     fonts_embedded: list[str] = Field(default_factory=list)
     substitutions: list[str] = Field(default_factory=list, description="字体缺失或被替代的情况")
     first_page_has_body: bool | None = None
+    font_env: str = Field(default="", description="渲染时的字体环境指纹（见 layout.fonts.env_fingerprint）；复用已渲染 PDF 前须一致")
     notes: list[str] = Field(default_factory=list)
 
 
