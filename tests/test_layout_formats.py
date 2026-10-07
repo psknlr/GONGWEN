@@ -20,7 +20,7 @@ from docx import Document
 from gongwen.layout.docx_compiler import compile_docx
 from gongwen.layout.pipeline import layout_document
 from gongwen.layout.profile import LayoutProfile, render_width_chars, split_balanced, split_title
-from gongwen.layout.render_check import check_rendering, double_lines, pdf_pages, red_bands
+from gongwen.layout.render_check import check_rendering, double_lines, ink_extent, pdf_pages, red_bands
 from gongwen.schemas.ir import Block, DocumentIR, Header, Imprint, Sentence, Signature
 
 MM = 25.4 / 72
@@ -140,21 +140,24 @@ def test_letter_format_measures_per_gbt9704_10_1(tmp_path):
     ir = _letter(14, copy_no="000001", secrecy="机密★1年", urgency="特急")
     pdf, pages, by, checks = _render(ir, tmp_path)
     first = pages[0][2]
-    mark = _line(first, ISSUER)
-    assert abs(mark.y0_mm - 30) <= 1, mark.y0_mm  # 修正前约 35.3mm
     for rid in ("LAY-LETTER-MARK", "LAY-LETTER-RULES", "LAY-LETTER-DOCNO", "LAY-PAGENO"):
         assert by[rid].status == "pass", (rid, by[rid].actual, by[rid].note)
     assert not any(c.status in ("fail", "warn") for c in checks), [(c.rule_id, c.actual) for c in checks if c.status != "pass"]
     bands = red_bands(pdf)
     (t1, t2), (b1, b2) = double_lines(bands)
     ink = [b for b in bands if b.height > 2][0]
+    # 标志字形（红色像素）上缘距上页边 30mm（修正前约 35.3mm）。不用 PDF 字框上缘：字框 = 基线 − 字体上伸度量，
+    # 因渲染字体而异（替代字体 Noto CJK 的字框比字形高约 3.7mm）
+    assert abs(ink.y0 - 30) <= 1, ink.y0
     assert abs(t1.y0 - ink.y1 - 4) <= 1  # 标志下 4mm
     assert t1.height > 2 * t2.height and b2.height > 2 * b1.height  # 上粗下细、上细下粗
     assert abs(297 - b2.y1 - 20) <= 0.5  # 距下页边 20mm
     for a, b in ((t1, t2), (b1, b2)):
         assert abs(b.x1 - a.x0 - 170) <= 1 and abs((a.x0 + b.x1) / 2 - 106) <= 1  # 170mm，以版心为准居中
     docno, copy_no = _line(first, "示卫函"), _line(first, "000001")
-    assert abs(docno.y0_mm - t2.y1 - 16 * 7 / 8 * MM) <= 0.5  # 3 号字高的 7/8
+    w0 = next(w for w in docno.words if "示卫函" in w[2])
+    glyph = ink_extent(pdf, 1, w0[0] * MM, docno.x1 * MM, docno.y0_mm - 1.5, docno.y1 * MM)
+    assert abs(glyph[0] - t2.y1 - 16 * 7 / 8 * MM) <= 0.5, glyph  # 发文字号字形上缘距双线 3 号字高的 7/8
     assert abs(docno.x1 * MM - 184) <= 0.5 and abs(copy_no.x0_mm - 28) <= 0.5 and abs(copy_no.y0_mm - docno.y0_mm) <= 0.5
     urgency = _line(first, "特急")
     assert urgency.y0_mm > _line(first, "机密").y0_mm > docno.y0_mm  # 份号、密级、紧急程度自上而下

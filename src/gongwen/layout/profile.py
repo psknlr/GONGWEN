@@ -6,7 +6,7 @@ import functools
 import math
 import re
 import unicodedata
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +28,10 @@ def _raw(profile_id: str) -> dict[str, Any]:
 class LayoutProfile:
     data: dict[str, Any]
     margin_mode: str = "standard"
+    # 按公文模板排版时（见 layout.templates）：模板名、相对基础配置档的改动（含对国标的偏离）、单位信息
+    template: str = ""
+    changes: list[Any] = field(default_factory=list)
+    unit: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def load(cls, profile_id: str = "gbt9704-2012", margin_mode: str = "standard", overrides: dict[str, Any] | None = None) -> "LayoutProfile":

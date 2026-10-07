@@ -44,6 +44,8 @@ class LayoutReport(GWModel):
     checks: list[LayoutCheck] = Field(default_factory=list)
     render: RenderInfo = Field(default_factory=RenderInfo)
     outputs: list[OutputFile] = Field(default_factory=list)
+    template: str = Field(default="", description="排版所用的公文模板；空表示按基础配置档的默认参数")
+    deviations: list[str] = Field(default_factory=list, description="模板偏离 GB/T 9704—2012 的各项（含条款与强度）")
 
     def failures(self) -> list[LayoutCheck]:
         return [c for c in self.checks if c.status == "fail"]

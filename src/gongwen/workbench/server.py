@@ -20,6 +20,7 @@ from urllib.parse import urlparse
 from ..harness.permissions import Principal
 from ..orchestrator import Engine
 from ..schemas.ir import DocumentIR
+from .layout_routes import layout_post, preview_image, task_preview_page, templates_page
 from .page import PAGE_CSS, build_page
 
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "[::1]"}
@@ -36,12 +37,12 @@ def task_list_html(engine: Engine) -> str:
         rows.append(
             f'<div class="card"><h4><a href="/task/{tid}">{tid}</a> <span class="st">{html.escape(st.stage.value)}</span> '
             f'<span class="st">{html.escape(st.doc_status.value)}</span></h4><div class="meta">{req}</div>'
-            f'<div class="meta">待确认 {len(st.pending_checkpoints())} 项｜第 {st.current_version} 版</div></div>'
+            f'<div class="meta">待确认 {len(st.pending_checkpoints())} 项｜第 {st.current_version} 版｜<a href="/preview/{tid}">排版预览</a></div></div>'
         )
     body = "".join(rows) or '<div class="empty">暂无任务。使用 gongwen task new 创建。</div>'
     return f"""<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>公文智能体</title><style>{PAGE_CSS} .wrap{{max-width:900px;margin:0 auto;padding:16px}}</style></head>
-<body><header class="top"><h1>公文智能体 · 任务列表</h1></header><div class="wrap">{body}</div></body></html>"""
+<body><header class="top"><h1>公文智能体 · 任务列表</h1><a href="/templates">公文模板</a></header><div class="wrap">{body}</div></body></html>"""
 
 
 def early_stage_html(engine: Engine, task_id: str, api: str, token: str) -> str:
@@ -106,6 +107,15 @@ def make_handler(engine: Engine, user: Principal, token: str):
         def _json(self, code: int, obj) -> None:
             self._send(code, json.dumps(obj, ensure_ascii=False, default=str), "application/json; charset=utf-8")
 
+        def _send_png(self, data: bytes) -> None:
+            self.send_response(200)
+            self.send_header("Content-Type", "image/png")
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(data)
+
         def _host_ok(self) -> bool:
             host = (self.headers.get("Host") or "").split(":")[0]
             origin = self.headers.get("Origin")
@@ -137,6 +147,15 @@ def make_handler(engine: Engine, user: Principal, token: str):
                     return self._json(200, engine.status(tid))
                 except KeyError:
                     return self._json(404, {"message": "任务不存在"})
+            # 公文模板与排版预览（见 layout_routes）
+            if path == "/templates":
+                return self._send(200, templates_page(engine, token, urlparse(self.path).query))
+            if path.startswith("/preview/") and path.count("/") == 2:
+                return self._send(*task_preview_page(engine, path.split("/")[2], token))
+            if path.startswith("/preview-img/") and path.count("/") == 3:
+                _, _, pid, name = path.split("/")
+                data = preview_image(engine, pid, name)
+                return self._send_png(data) if data is not None else self._send(404, "not found")
             return self._send(404, "not found")
 
         def do_POST(self):  # noqa: N802
@@ -207,6 +226,8 @@ def make_handler(engine: Engine, user: Principal, token: str):
                     engine.request_revision(body["task_id"], by=user, instruction=body.get("instruction"), edits=body.get("edits"), fact_changes=body.get("fact_changes"))
                     st = engine.advance(body["task_id"], by=user)
                     return self._json(200, {"message": f"已提交修订，当前阶段：{st.stage.value}", "stage": st.stage.value})
+                if path in ("/api/template", "/api/template/preview", "/api/preview"):
+                    return self._json(*layout_post(engine, path, body))
             except (KeyError, ValueError, TypeError, PermissionError) as exc:
                 return self._json(400, {"message": f"处理失败：{exc}"})
             except Exception as exc:  # 失败必须可见：返回错误说明，而不是断开连接
