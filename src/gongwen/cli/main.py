@@ -103,7 +103,7 @@ def make_engine(args, *, render: bool | None = None, interactive: bool = True):
     for item in args.config or []:
         overrides = _merge(overrides, _parse_override(item))
     if getattr(args, "offline", False):
-        overrides = _merge(overrides, {"model": {"provider": "offline"}, "models": {}, "routing": {"light": None, "heavy": None, "reviewer": None}})
+        overrides = _merge(overrides, {"model": {"provider": "offline"}, "models": {}, "routing": {"light": None, "heavy": None, "reviewer": None, "agent": None}})
     if render is not None:
         overrides = _merge(overrides, {"layout": {"render_check": render}})
     # 只有交互终端才有人工审批通道；MCP 等管道模式下标准输入是协议流，绝不能用来询问
@@ -242,6 +242,9 @@ def cmd_doctor(args) -> int:
     for role, desc in router.describe().items():
         print(f"  模型 {role}：{desc}")
     print(f"  出网白名单：{cfg.egress.allowed_hosts or '（空：除本机外一律拒绝）'}　MCP 返回上限：{cfg.mcp.max_clearance.value}")
+    from .model_cmd import doctor_lines
+
+    print("\n".join(doctor_lines(cfg)))
     lib = rt.policies
     print(f"  依据库：{len(lib.docs)} 份文件（含已废止旧规，用于识别过时引用）")
     print(f"  技能说明目录：{SKILLS_DIR}（{len(list(SKILLS_DIR.glob('*/SKILL.md')))} 项）")
@@ -1124,6 +1127,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--out", help="报告输出目录")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_eval)
+
+    from .model_cmd import add_parser as add_model_parser
+
+    add_model_parser(sub)
     return ap
 
 

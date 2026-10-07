@@ -85,9 +85,10 @@ config = { strict = true }
 
 ## 七、模型接入与路由（设计 §8.2）
 
-- `llm/openai_compat.py`：DeepSeek、xAI、智谱、通义千问、Kimi、Ollama、vLLM 及任意 OpenAI 兼容服务；
+- `llm/presets.py`：各服务商预设（地址与区域变体、密钥环境变量、默认型号、接口差异）与别名；`gongwen model presets/add/list/test/remote` 基于它接入与核验；
+- `llm/openai_compat.py`：OpenAI GPT、DeepSeek、智谱 GLM、MiniMax、通义千问、Kimi、xAI、Ollama、vLLM 及任意 OpenAI 兼容服务（按预设处理输出上限参数、采样温度、JSON 模式、思考内容等差异）；
 - `llm/anthropic_provider.py`：Claude（官方 SDK；结构化输出、严格工具、拒答检查、服务端拒答回退）；
-- `llm/router.py`：按任务复杂度路由（light 抽取分类、heavy 起草修订、reviewer 独立审校、agent 对话），每次调用依次经过出网网关、预算、审计与拒答检查；
+- `llm/router.py`：按任务复杂度路由（light 抽取分类、heavy 起草修订、reviewer 独立审校、agent 对话；均可在 `[routing]` 指定具名模型），每次调用依次经过出网网关、预算、审计与拒答检查；
 - 未配置模型时所有技能走确定性路径，流程完整可用；配置模型后，模型输出仍要经逐句校验（不得新增数字、升级事实状态、改变义务强度、写入审批结论、删除占位），不通过即回退；
 - 模型拒答、输出不是 JSON 或结构不符：记录后回退确定性路径；接口故障（网络、超时、HTTP 错误，已按配置重试）统一为 `ModelCallFailed`，写入审计 `model.error`；起草、审校等可选的模型步骤改用确定性路径继续，并在任务提示中写明“模型接口调用失败，已改用确定性路径”，对话模式报告后可继续。
 

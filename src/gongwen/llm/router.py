@@ -18,7 +18,8 @@ from ..harness.budget import BudgetExceeded, BudgetGuard
 from ..harness.egress import EgressDenied, EgressGateway, EgressRequest
 from ..kernel.config import GongwenConfig, ModelConfig
 from ..schemas.common import Clearance, sha256_text
-from .base import ChatMessage, ModelCallFailed, ModelProvider, ModelRefused, ModelResponse, ModelUnavailable, ToolDef
+from . import presets
+from .base import ChatMessage, ModelCallFailed, ModelListUnsupported, ModelProvider, ModelRefused, ModelResponse, ModelUnavailable, ToolDef
 
 ROLES = ("light", "heavy", "reviewer", "agent")
 
@@ -26,12 +27,13 @@ ROLES = ("light", "heavy", "reviewer", "agent")
 def build_provider(mc: ModelConfig) -> ModelProvider | None:
     if mc.provider in ("offline", "", None):
         return None
-    if mc.provider == "anthropic":
+    preset = presets.resolve(mc.provider)  # 支持别名：claude、gpt、glm、kimi、minimax-cn 等
+    if preset is not None and preset.protocol == "anthropic":
         from .anthropic_provider import AnthropicProvider
 
         return AnthropicProvider(
             model=mc.name,
-            api_key_env=mc.api_key_env or "ANTHROPIC_API_KEY",
+            api_key_env=mc.api_key_env or preset.api_key_env,
             base_url=mc.base_url,
             max_clearance=mc.max_clearance,
             timeout=mc.timeout,
@@ -51,6 +53,9 @@ def build_provider(mc: ModelConfig) -> ModelProvider | None:
         max_tokens=mc.max_tokens,
         extra_headers=mc.extra_headers,
         max_retries=mc.max_retries,
+        thinking=mc.thinking,
+        json_mode=mc.json_mode,
+        extra_body=mc.extra_body,
     )
 
 
@@ -75,7 +80,7 @@ class ModelRouter:
 
     # ------------------------------------------------------------------
     def _model_config(self, role: str) -> ModelConfig:
-        name = getattr(self.config.routing, role, None) if role in ("light", "heavy", "reviewer") else None
+        name = getattr(self.config.routing, role, None) if role in ROLES else None
         return self.config.resolve_model(name)
 
     def provider(self, role: str) -> ModelProvider | None:
@@ -114,6 +119,30 @@ class ModelRouter:
             p = self.provider(r)
             out[r] = f"{p.name}:{p.model}" if p else ("offline" if not self._errors.get(r) else f"未就绪（{self._errors[r]}）")
         return out
+
+    def list_models(self, role: str = "heavy") -> list[dict[str, str]]:
+        """查询服务商当前可用的型号。不含任何材料，但同样经过出网网关（白名单）并留痕。"""
+        p = self.provider(role)
+        if p is None:
+            raise ModelUnavailable(self._errors.get(role) or "未配置模型（offline）")
+        lister = getattr(p, "list_models", None)
+        if lister is None:
+            raise ModelListUnsupported(f"{p.name} 适配不支持查询型号列表")
+        url = getattr(p, "models_endpoint", p.endpoint)
+        try:
+            self.egress.check(EgressRequest(url, "model.list", [Clearance.PUBLIC], p.max_clearance))
+        except EgressDenied as exc:
+            raise ModelUnavailable(f"出网网关拒绝：{exc}") from exc
+        self.audit("model.list", {"role": role, "provider": p.name, "endpoint": url})
+        try:
+            return lister()
+        except (ModelListUnsupported, ModelUnavailable):
+            raise
+        except Exception as exc:  # 同 call()：统一为 ModelCallFailed 并留痕
+            detail = str(exc) if isinstance(exc, ModelCallFailed) else f"{type(exc).__name__}: {exc}"
+            err = ModelCallFailed(f"{p.name} 型号列表查询失败：{detail[:300]}")
+            self.audit("model.error", {"role": role, "provider": p.name, "purpose": "model.list", "error": str(err)})
+            raise err from exc
 
     # ------------------------------------------------------------------
     def call(

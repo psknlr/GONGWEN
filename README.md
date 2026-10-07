@@ -91,7 +91,7 @@ gongwen format examples/drafts/通知稿.txt -o out   # 按 GB/T 9704—2012 排
 
 - **内核**（`kernel/`）：借鉴 DeepSeek Harness / Cordis 的“一切皆插件”——服务注入、事件、可回收副作用；单位可用插件替换检索器、追加规则。
 - **治理**（`harness/`）：权限控制到“人—事项—材料—工具动作”；出网网关是唯一出口，默认拒绝；会话日志为哈希链、只记哈希与摘要，可校验、回放、分叉。
-- **模型**（`llm/`）：DeepSeek、xAI Grok、智谱 GLM、通义千问、Kimi、Ollama、vLLM 等 OpenAI 兼容接口，以及 Anthropic Claude（官方 SDK）；未配置模型时走完整的确定性路径。所有模型输出都要经确定性校验，越过证据的内容一律拒绝。
+- **模型**（`llm/`）：Anthropic Claude（官方 SDK），以及 OpenAI GPT、DeepSeek、智谱 GLM、MiniMax、通义千问、Kimi、xAI Grok、Ollama、vLLM 等 OpenAI 兼容接口（预设见 `llm/presets.py`，接口差异逐一处理）；未配置模型时走完整的确定性路径。所有模型输出都要经确定性校验，越过证据的内容一律拒绝。
 
 详见 [`docs/architecture.md`](docs/architecture.md)、[`docs/protocol-mapping.md`](docs/protocol-mapping.md)（设计条目 → 实现与测试）、[`docs/harness-lineage.md`](docs/harness-lineage.md)（与 grok-cli、Codex、DeepSeek Harness、ZCode 的关系）。
 
@@ -125,6 +125,18 @@ gongwen format examples/drafts/通知稿.txt -o out   # 按 GB/T 9704—2012 排
 ## 配置
 
 工作区 `.gongwen/config.toml`（`gongwen init` 生成），优先级：默认值 < `~/.gongwen/config.toml` < 工作区 < 配置档 `-p` < 环境变量 < 命令行 `-c key=value`。见 [`docs/configuration.md`](docs/configuration.md)。
+
+接入模型（Claude、GPT、DeepSeek、GLM、MiniMax、通义、Kimi、本地 Ollama/vLLM 等）：
+
+```bash
+gongwen model presets                                              # 可接入的服务商、地址、密钥环境变量与默认型号
+export DEEPSEEK_API_KEY=…                                          # 密钥只放在环境变量里，不写入配置
+gongwen model add ds --preset deepseek --role heavy --allow-egress # 写入具名模型、路由与出网白名单
+gongwen model test ds                                              # 一次受控的最小调用：密钥、出网、型号、JSON 模式
+gongwen model remote ds                                            # 查询服务商当前可用的型号
+```
+
+公共云模型默认只处理公开材料；型号名称会随服务商更新，以 `gongwen model remote` 为准。详见 [`docs/configuration.md`](docs/configuration.md#三模型接入)。
 
 ## 开发
 

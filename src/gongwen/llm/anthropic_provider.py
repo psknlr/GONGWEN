@@ -5,6 +5,7 @@
 * 结构化输出使用 output_config.format（json_schema），工具使用 strict 模式；
 * 默认启用服务端拒答回退（fallbacks="default"，beta server-side-fallback-2026-07-01），
   并在读取内容前先检查 stop_reason == "refusal"；
+* Haiku 4.5、Sonnet 4.5 及更早的型号不接受 effort：对这些型号不发送 output_config.effort，也不请求服务端拒答回退；
 * 使用流式请求并取最终消息：长输出不会因非流式请求在生成完成前超时（超时按两次数据之间的间隔计）；
 * 工具调用轮次中原样回传 response.content（含思考块），保证多轮一致；流式中途回退时，
   边界之前被拒答模型的思考块与工具调用既不回传也不执行（回退块本身是审计标记，不回传）；
@@ -17,11 +18,17 @@ import os
 from typing import Any
 
 from ..schemas.common import Clearance
-from .base import ChatMessage, ModelCallFailed, ModelResponse, ToolCall, ToolDef, Usage, proxy_overrides
+from .base import ChatMessage, ModelCallFailed, ModelListUnsupported, ModelResponse, ToolCall, ToolDef, Usage, proxy_overrides
 
 DEFAULT_MODEL = "claude-opus-5-5"
 DEFAULT_KEY_ENV = "ANTHROPIC_API_KEY"
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
+# 不接受 output_config.effort 的旧型号（Haiku 4.5、Sonnet 4.5 及更早）：不发送 effort，也不请求服务端拒答回退
+_LEGACY_PREFIXES = ("claude-haiku-", "claude-sonnet-4-5", "claude-sonnet-4-0", "claude-sonnet-4-2", "claude-opus-4-0", "claude-opus-4-1", "claude-opus-4-2", "claude-3")
+
+
+def legacy_model(model: str) -> bool:
+    return (model or "").lower().startswith(_LEGACY_PREFIXES)
 
 
 _UNSUPPORTED = ("minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "multipleOf", "minLength", "maxLength")
@@ -107,6 +114,25 @@ class AnthropicProvider:
     def endpoint(self) -> str:
         return f"{self.base_url.rstrip('/')}/v1/messages"
 
+    @property
+    def models_endpoint(self) -> str:
+        return f"{self.base_url.rstrip('/')}/v1/models"
+
+    def list_models(self) -> list[dict[str, str]]:
+        """查询当前账号可用的 Claude 型号（Models API，SDK 自动翻页）。"""
+        import anthropic
+
+        try:
+            return [{"id": m.id, "display_name": getattr(m, "display_name", "") or ""} for m in self.client.models.list()]
+        except anthropic.APITimeoutError as exc:
+            raise ModelCallFailed("请求超时") from exc
+        except anthropic.APIConnectionError as exc:
+            raise ModelCallFailed(f"连接失败：{exc}") from exc
+        except anthropic.NotFoundError as exc:
+            raise ModelListUnsupported(f"该地址未提供模型列表接口（GET {self.models_endpoint} 返回 HTTP 404）") from exc
+        except anthropic.APIStatusError as exc:
+            raise ModelCallFailed(f"HTTP {exc.status_code}：{str(exc.message)[:200]}") from exc
+
     @staticmethod
     def _convert(messages: list[ChatMessage]) -> list[dict[str, Any]]:
         out: list[dict[str, Any]] = []
@@ -161,20 +187,22 @@ class AnthropicProvider:
         max_tokens: int | None = None,
         temperature: float | None = None,  # 当前模型不接受采样参数，忽略
     ) -> ModelResponse:
-        output_config: dict[str, Any] = {"effort": self.effort}
+        legacy = legacy_model(self.model)
+        output_config: dict[str, Any] = {} if legacy else {"effort": self.effort}
         if json_schema is not None:
             output_config["format"] = {"type": "json_schema", "schema": _strictify(json_schema)}
         kwargs: dict[str, Any] = {
             "model": self.model,
             "max_tokens": max_tokens or self.max_tokens,
             "messages": self._convert(messages),
-            "output_config": output_config,
         }
+        if output_config:
+            kwargs["output_config"] = output_config
         if system:
             kwargs["system"] = system
         if tools:
             kwargs["tools"] = [{"name": t.name, "description": t.description, "input_schema": _strictify(t.parameters), "strict": True} for t in tools]
-        if self.use_fallbacks:
+        if self.use_fallbacks and not legacy:
             kwargs["betas"] = [FALLBACK_BETA]
             kwargs["fallbacks"] = "default"
         response = self._request(kwargs)

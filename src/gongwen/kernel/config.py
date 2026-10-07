@@ -14,7 +14,7 @@ from ..schemas.common import Clearance, EnvironmentRoute, GWModel
 
 
 class ModelConfig(GWModel):
-    provider: str = Field(default="offline", description="offline/deepseek/xai/zhipu/qwen/moonshot/ollama/vllm/openai_compat/anthropic/scripted")
+    provider: str = Field(default="offline", description="offline/anthropic/openai/deepseek/zhipu/minimax/minimax_intl/qwen/moonshot/xai/ollama/vllm/openai_compat/scripted；别名 claude/gpt/glm/kimi/minimax-cn（见 gongwen model presets）")
     name: str = ""
     base_url: str = ""
     api_key_env: str = ""
@@ -27,6 +27,9 @@ class ModelConfig(GWModel):
     temperature: float = 0.2
     max_tokens: int = 4096
     extra_headers: dict[str, str] = Field(default_factory=dict)
+    thinking: bool | None = Field(default=None, description="思考模式开关（目前用于智谱 GLM 的 thinking 字段）；不设置时不发送，按服务商默认")
+    json_mode: str = Field(default="", description="结构化输出方式：留空按预设；json_schema / json_object / none（只靠提示约束）")
+    extra_body: dict[str, Any] = Field(default_factory=dict, description="附加到请求体的字段（OpenAI 兼容接口），用于服务商新增参数")
 
 
 class RoutingConfig(GWModel):
@@ -35,6 +38,7 @@ class RoutingConfig(GWModel):
     light: str | None = None
     heavy: str | None = None
     reviewer: str | None = Field(default=None, description="独立审校建议使用不同模型或至少独立上下文")
+    agent: str | None = Field(default=None, description="对话代理（gongwen chat）使用的模型；不设置时使用 [model]")
 
 
 class EnvironmentConfig(GWModel):
@@ -218,7 +222,8 @@ region = ""
 
 [model]
 # offline：不调用任何外部模型，使用确定性规则与模板（默认，零出网）。
-# 可选：deepseek / xai / zhipu / qwen / moonshot / ollama / vllm / openai_compat / anthropic
+# 可选：anthropic(claude) / openai(gpt) / deepseek / zhipu(glm) / minimax / minimax_intl / qwen / moonshot(kimi)
+#       / xai / ollama / vllm / openai_compat。推荐用 gongwen model presets 查看、gongwen model add 添加具名模型。
 provider = "offline"
 name = ""
 base_url = ""

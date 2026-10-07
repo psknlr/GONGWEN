@@ -34,6 +34,10 @@ class ModelCallFailed(RuntimeError):
     调用方应显式失败或告知用户，不能当作“未配置模型”悄悄改走其他路径。"""
 
 
+class ModelListUnsupported(RuntimeError):
+    """服务商未提供模型列表接口（如 GET /models 返回 404）：请查阅服务商文档确认型号名称。"""
+
+
 @dataclass
 class ToolDef:
     name: str
@@ -108,11 +112,34 @@ def proxy_overrides(base_url: str) -> dict[str, None] | None:
 
 
 _FENCE = re.compile(r"```(?:json)?\s*(.*?)```", re.S)
+_THINK_BLOCK = re.compile(r"<(think|thinking)>.*?</\1>", re.S | re.I)
+_THINK_CLOSE = re.compile(r"</(?:think|thinking)>", re.I)
+_THINK_OPEN = re.compile(r"<(?:think|thinking)>", re.I)
+
+
+def strip_reasoning(text: str | None) -> str:
+    """去除正文中夹带的思考内容（<think>…</think>、<thinking>…</thinking>）。
+
+    部分推理模型（如早期 MiniMax M2、本地部署的推理模型）把思考过程写在正文里：思考内容不是答案，
+    不得参与 JSON 解析、不得作为文稿内容。另处理两种不完整形式：缺少开标签（只有 </think>）时
+    去掉其前的全部内容；只有开标签（输出被截断）时去掉其后的全部内容。没有标签时原样返回。"""
+    if not text:
+        return text or ""
+    if not (_THINK_CLOSE.search(text) or _THINK_OPEN.search(text)):
+        return text
+    t = _THINK_BLOCK.sub("", text)
+    closes = list(_THINK_CLOSE.finditer(t))
+    if closes:
+        t = t[closes[-1].end() :]
+    m = _THINK_OPEN.search(t)
+    if m:
+        t = t[: m.start()]
+    return t.strip()
 
 
 def parse_json(text: str) -> Any:
-    """宽容解析模型返回的 JSON（去除代码围栏、截取首个对象/数组）。失败时抛 ValueError。"""
-    t = text.strip()
+    """宽容解析模型返回的 JSON（去除思考标签与代码围栏、截取首个对象/数组）。失败时抛 ValueError。"""
+    t = strip_reasoning(text).strip()
     m = _FENCE.search(t)
     if m:
         t = m.group(1).strip()
