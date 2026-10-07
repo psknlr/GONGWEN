@@ -5,7 +5,9 @@
 * 信函格式（10.1）：发文机关标志距上页边、两条红色双线的位置、粗细次序与线长、发文字号位置、首页不显示页码；
   红色线条不在文本层中，将页面栅格化后按红色像素测量；
 * 字体：对照系统已安装字体与 PDF 实际嵌入字体，字体缺失或被替代时明确报告，
-  不能在字体被替代的情况下声称“已完全满足指定版式”；
+  不能在字体被替代的情况下声称“已完全满足指定版式”；指定字库未安装时，渲染子进程按 fonts.render_env
+  把字库名映射到开源替代字体（仅供预览），报告写明“已替代：……（开源替代字体，仅供预览）”；
+* 按模板排版时，各项核验以模板的生效参数为准，模板对国标的偏离另行列出（见 layout.templates）；
 * 环境缺少 LibreOffice 时，结论为“未进行实际渲染核验”，而不是“通过”。
 """
 
@@ -21,6 +23,7 @@ from pathlib import Path
 
 from ..schemas.ir import DocumentIR
 from ..schemas.layout import LayoutCheck, RenderInfo
+from . import fonts as gwfonts
 from .profile import MM_PER_PT, LayoutProfile
 
 _WORD_RE = re.compile(r'<word xMin="([\d.]+)" yMin="([\d.]+)" xMax="([\d.]+)" yMax="([\d.]+)">([^<]*)</word>')
@@ -35,6 +38,7 @@ class Line:
     x1: float
     y1: float
     text: str
+    words: list[tuple[float, float, str]] | None = None  # (左, 右, 文字)，单位磅
 
     @property
     def x0_mm(self) -> float:
@@ -69,27 +73,80 @@ def tools_available() -> dict[str, str | None]:
 
 _HI = bytes(1 if i >= 0xC8 else 0 for i in range(256))
 _LO = bytes(1 if i <= 0x50 else 0 for i in range(256))
+_DARK = bytes(1 if i < 0xA0 else 0 for i in range(256))
+_RASTER: dict[tuple[str, float, int, int], tuple[int, int, int, bytes] | None] = {}
+
+
+def page_raster(pdf: Path, page: int = 1, dpi: int = 200) -> tuple[int, int, int, bytes] | None:
+    """一面的栅格（PPM，不抗锯齿）：(宽, 高, 像素起点, 原始字节)。按文件与修改时间缓存；缺少 pdftoppm 时返回 None。"""
+    if not shutil.which("pdftoppm"):
+        return None
+    try:
+        stat = Path(pdf).stat()
+        key = (f"{Path(pdf).resolve()}:{stat.st_size}", stat.st_mtime, page, dpi)
+    except OSError:
+        return None
+    if key in _RASTER:
+        return _RASTER[key]
+    try:
+        raw = subprocess.run(["pdftoppm", "-r", str(dpi), "-f", str(page), "-l", str(page), "-aa", "no", "-aaVector", "no", str(pdf)], capture_output=True, timeout=60).stdout
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+    m = re.match(rb"P6\s+(\d+)\s+(\d+)\s+255\s", raw)
+    res = (int(m.group(1)), int(m.group(2)), m.end(), raw) if m else None
+    if len(_RASTER) >= 4:  # 200dpi 的 A4 栅格约 11.6MB：只保留最近几面
+        _RASTER.clear()
+    _RASTER[key] = res
+    return res
+
+
+def ink_extent(pdf: Path, page: int, x0_mm: float, x1_mm: float, y0_mm: float, y1_mm: float, red: bool = False, dpi: int = 200) -> tuple[float, float] | None:
+    """矩形范围内字形（着墨像素）的上下缘（mm）：red=True 只计红色像素，否则计深色像素（任一通道低于 160）。
+
+    PDF 文本框的上缘是基线减去字体的上伸度量，因字体而异（Noto CJK 比文泉驿正黑高约 0.19 个字高）；
+    “上边缘”“距离”按字形测量才与字体无关。没有着墨像素或无法栅格化时返回 None。"""
+    r = page_raster(pdf, page, dpi)
+    if r is None:
+        return None
+    w, h, start, raw = r
+    px = 25.4 / dpi
+    xa, xb = max(0, int(x0_mm / px)), min(w, int(x1_mm / px) + 1)
+    ya, yb = max(0, int(y0_mm / px)), min(h, int(y1_mm / px) + 1)
+    if xa >= xb or ya >= yb:
+        return None
+    top = bottom = None
+    for y in range(ya, yb):
+        seg = raw[start + y * w * 3 + xa * 3 : start + y * w * 3 + xb * 3]
+        if red:
+            r_ = seg[0::3].translate(_HI)
+            if 1 not in r_:
+                continue
+            hit = int.from_bytes(r_, "big") & int.from_bytes(seg[1::3].translate(_LO), "big") & int.from_bytes(seg[2::3].translate(_LO), "big")
+            if not hit:
+                continue
+        elif 1 not in seg.translate(_DARK):
+            continue
+        if top is None:
+            top = y
+        bottom = y
+    if top is None:
+        return None
+    return top * px, (bottom + 1) * px
 
 
 def red_bands(pdf: Path, page: int = 1, dpi: int = 200) -> list[Band] | None:
     """把一面栅格化（不抗锯齿），找出含红色像素的连续像素行，返回各段的上下缘与左右端（mm）。
 
     pdftotext 不输出线条，红色分隔线、双线以及红色标志的字形上下缘都以此测量。缺少 pdftoppm 或转换失败时返回 None。"""
-    if not shutil.which("pdftoppm"):
+    r = page_raster(pdf, page, dpi)
+    if r is None:
         return None
-    try:
-        raw = subprocess.run(["pdftoppm", "-r", str(dpi), "-f", str(page), "-l", str(page), "-aa", "no", "-aaVector", "no", str(pdf)], capture_output=True, timeout=60).stdout
-    except (subprocess.TimeoutExpired, OSError):
-        return None
-    m = re.match(rb"P6\s+(\d+)\s+(\d+)\s+255\s", raw)
-    if not m:
-        return None
-    w, h = int(m.group(1)), int(m.group(2))
+    w, h, start, raw = r
     stride, px = w * 3, 25.4 / dpi
     bands: list[Band] = []
     last_y = -2
     for y in range(h):
-        row = raw[m.end() + y * stride : m.end() + (y + 1) * stride]
+        row = raw[start + y * stride : start + (y + 1) * stride]
         r = row[0::3].translate(_HI)
         if 1 not in r:
             continue
@@ -141,7 +198,8 @@ def installed_font_families() -> set[str]:
     return fams
 
 
-def to_pdf(docx: Path, out_dir: Path, timeout: int = 180) -> Path | None:
+def to_pdf(docx: Path, out_dir: Path, timeout: int = 180, env_extra: dict[str, str] | None = None) -> Path | None:
+    """DOCX（或 DOTX）→ PDF。env_extra 为渲染子进程追加的环境变量（如替代字体映射的 FONTCONFIG_FILE）。"""
     profile_dir = Path(tempfile.mkdtemp(prefix="gw-lo-"))
     try:
         subprocess.run(
@@ -149,7 +207,7 @@ def to_pdf(docx: Path, out_dir: Path, timeout: int = 180) -> Path | None:
             capture_output=True,
             text=True,
             timeout=timeout,
-            env={**os.environ, "HOME": str(profile_dir)},
+            env={**os.environ, "HOME": str(profile_dir), **(env_extra or {})},
         )
     except (subprocess.TimeoutExpired, OSError):
         return None
@@ -171,7 +229,7 @@ def pdf_pages(pdf: Path) -> list[tuple[float, float, list[Line]]]:
         for lm in _LINE_RE.finditer(body):
             words = _WORD_RE.findall(lm.group(5))
             text = "".join(wd[4] for wd in words)
-            lines.append(Line(float(lm.group(1)), float(lm.group(2)), float(lm.group(3)), float(lm.group(4)), text))
+            lines.append(Line(float(lm.group(1)), float(lm.group(2)), float(lm.group(3)), float(lm.group(4)), text, [(float(wd[0]), float(wd[2]), wd[4]) for wd in words]))
         lines.sort(key=lambda l: (round(l.y0, 1), l.x0))
         pages.append((w, h, lines))
     return pages
@@ -192,6 +250,26 @@ def pdf_fonts(pdf: Path) -> list[str]:
 
 def _norm(s: str) -> str:
     return re.sub(r"\s+", "", s)
+
+
+def _is_red(color: str | None) -> bool:
+    c = str(color or "FF0000").lstrip("#")
+    try:
+        r, g, b = int(c[0:2], 16), int(c[2:4], 16), int(c[4:6], 16)
+    except ValueError:
+        return True
+    return r >= 0xC8 and g <= 0x50 and b <= 0x50
+
+
+def glyph_top(pdf: Path, line: Line, page: int = 1, red: bool = False, x_range: tuple[float, float] | None = None) -> tuple[float, str, float, str]:
+    """一行文字的上边缘：能栅格化时按字形（着墨像素）测量，否则退回 PDF 字框上缘。
+
+    返回 (上边缘 mm, 说明, 容差 mm, 附注)。字框上缘 = 基线 − 字体上伸度量，因字体而异，只能粗略代表字形上缘。"""
+    x0, x1 = x_range or (line.x0_mm - 0.5, line.x1 * MM_PER_PT + 0.5)
+    ext = ink_extent(pdf, page, x0, x1, line.y0_mm - 1.5, line.y1 * MM_PER_PT, red=red)
+    if ext is not None:
+        return ext[0], "字形上缘实测", 1.5, "按栅格化页面的着墨像素测量字形上缘，与渲染字体的字框度量无关"
+    return line.y0_mm, "字框上缘实测", 3.0, "字形上缘与字框上缘存在差异，误差 3mm 内视为符合"
 
 
 def _full_page_rows(pages: list[tuple[float, float, list[Line]]], top_mm: float, bottom_mm: float, pitch_mm: float) -> list[tuple[int, int]]:
@@ -223,7 +301,8 @@ def _letter_checks(pdf: Path, first: list[Line], ir: DocumentIR, profile: Layout
     ml = next((l for l in first if mark[:4] and mark[:4] in _norm(l.text)), None)
     if ml is not None:
         exp = lt["organ_mark_top_from_page_mm"]
-        out.append(LayoutCheck(rule_id="LAY-LETTER-MARK", item="信函格式发文机关标志上边缘至上页边", expected=f"{exp}mm", actual=f"{ml.y0_mm:.1f}mm（字框上缘实测）", status="pass" if abs(ml.y0_mm - exp) <= 3 else "warn", clause=clause, note="字形上缘与字框上缘存在差异，误差 3mm 内视为符合"))
+        top, how, tol, note = glyph_top(pdf, ml, red=_is_red(profile.el("organ_mark").get("color")))
+        out.append(LayoutCheck(rule_id="LAY-LETTER-MARK", item="信函格式发文机关标志上边缘至上页边", expected=f"{exp}mm", actual=f"{top:.1f}mm（{how}）", status="pass" if abs(top - exp) <= tol else "warn", clause=clause, note=note))
     bands = red_bands(pdf)
     if bands is None:
         out.append(LayoutCheck(rule_id="LAY-LETTER-RULES", item="信函格式红色双线", expected="标志下 4mm、距下页边 20mm 各一条，长 170mm", actual="缺少 pdftoppm，未测量", status="unverified", clause=clause))
@@ -264,35 +343,59 @@ def _letter_checks(pdf: Path, first: list[Line], ir: DocumentIR, profile: Layout
     dl = next((l for l in first if _norm(l.text).endswith(shown) and l.y0_mm > top[1].y1), None) if shown else None
     if dl is not None:
         exp = lt["element_gap_ratio"] * profile.body_pt * MM_PER_PT
-        gap = dl.y0_mm - top[1].y1
+        # 只测发文字号本身（同一行左侧可能是份号）：从行尾往前取够发文字号字数的词
+        x0 = dl.x0_mm
+        acc = ""
+        for wx0, _wx1, wt in reversed(dl.words or []):
+            acc = _norm(wt) + acc
+            x0 = wx0 * MM_PER_PT
+            if len(acc) >= len(shown):
+                break
+        g_top, how, _tol, note = glyph_top(pdf, dl, x_range=(x0 - 0.5, dl.x1 * MM_PER_PT + 0.5))
+        gap = max(g_top, top[1].y1) - top[1].y1
         right = profile.data["margins"]["left_mm"] + profile.data["type_area"]["width_mm"]
         ok = abs(gap - exp) <= 1.5 and abs(dl.x1 * MM_PER_PT - right) <= 1.5
-        out.append(LayoutCheck(rule_id="LAY-LETTER-DOCNO", item="信函格式发文字号位置", expected=f"顶格居版心右边缘，距第一条双线 {exp:.1f}mm（3 号字高的 7/8）", actual=f"距双线 {gap:.1f}mm（字框上缘实测），右端距版心右边缘 {round(right - dl.x1 * MM_PER_PT, 1) + 0.0}mm", status="pass" if ok else "warn", clause=clause))
+        out.append(LayoutCheck(rule_id="LAY-LETTER-DOCNO", item="信函格式发文字号位置", expected=f"顶格居版心右边缘，距第一条双线 {exp:.1f}mm（3 号字高的 7/8）", actual=f"距双线 {gap:.1f}mm（{how}），右端距版心右边缘 {round(right - dl.x1 * MM_PER_PT, 1) + 0.0}mm", status="pass" if ok else "warn", clause=clause, note=note))
     return out
 
 
-def check_rendering(docx: Path, ir: DocumentIR, profile: LayoutProfile, fonts_requested: set[str], out_dir: Path) -> tuple[RenderInfo, list[LayoutCheck]]:
+def font_substitutions(fonts_requested: set[str], profile: LayoutProfile, embedded: list[str], env_extra: dict[str, str] | None) -> list[str]:
+    """逐个字库说明渲染时的替代情况（以字库名开头）。指定字库已安装（族名逐字一致）的不列出。"""
+    installed = gwfonts.installed_families()
+    if not installed:  # 没有 fontconfig 工具：按旧口径只能说明“被替代”
+        fams = installed_font_families()
+        return [f"{f}：本机未安装，渲染时被替代（实际嵌入：{'、'.join(embedded) or '未知'}）" for f in sorted(fonts_requested) if f not in fams]
+    out = []
+    for f in sorted(fonts_requested):
+        msg = gwfonts.describe_render(f, profile.data.get("fonts"), installed, env_extra, embedded)
+        if msg:
+            out.append(msg)
+    return out
+
+
+def check_rendering(docx: Path, ir: DocumentIR, profile: LayoutProfile, fonts_requested: set[str], out_dir: Path, font_substitution: bool = True) -> tuple[RenderInfo, list[LayoutCheck]]:
     info = RenderInfo(fonts_requested=sorted(fonts_requested))
     checks: list[LayoutCheck] = []
     tools = tools_available()
     if not tools["soffice"] or not tools["pdftotext"]:
         info.notes.append("环境缺少 LibreOffice 或 poppler-utils：未进行实际渲染核验，版式结论仅基于生成参数")
         return info, checks
-    pdf = to_pdf(docx, out_dir)
-    if pdf is None:
-        info.notes.append("LibreOffice 转换失败：未进行实际渲染核验")
-        return info, checks
+    with gwfonts.render_env(profile.data.get("fonts"), enabled=font_substitution) as fc_env:
+        pdf = to_pdf(docx, out_dir, env_extra=fc_env)
+        if pdf is None:
+            info.notes.append("LibreOffice 转换失败：未进行实际渲染核验")
+            return info, checks
+        info.fonts_embedded = pdf_fonts(pdf)
+        # ---- 字体：缺失与替代（以 PDF 实际嵌入的字体为准）
+        info.substitutions = font_substitutions(fonts_requested, profile, info.fonts_embedded, fc_env)
     info.renderer = libreoffice_version()
     info.rendered = True
     info.pdf_path = str(pdf)
     pages = pdf_pages(pdf)
     info.pages = len(pages)
-    # ---- 字体：缺失与替代
-    installed = installed_font_families()
-    info.fonts_embedded = pdf_fonts(pdf)
-    for f in sorted(fonts_requested):
-        if f not in installed:
-            info.substitutions.append(f"{f}：本机未安装，渲染时被替代（实际嵌入：{'、'.join(info.fonts_embedded) or '未知'}）")
+    if getattr(profile, "template", ""):
+        n = sum(1 for c in getattr(profile, "changes", []) if c.deviates)
+        info.notes.append(f"按模板“{profile.template}”排版（基于 {profile.id}），各项核验以模板生效参数为准；模板偏离 GB/T 9704—2012 {n} 项，见“模板偏离”各项")
     if not pages:
         info.notes.append("PDF 文本层为空，无法测量版面")
         return info, checks
@@ -348,18 +451,31 @@ def check_rendering(docx: Path, ir: DocumentIR, profile: LayoutProfile, fonts_re
         exp, what, clause, level = mark_exp
         ml = next((l for l in first if mark[:4] and mark[:4] in _norm(l.text)), None)
         if ml is not None:
-            dist = ml.y0_mm - top_area
-            checks.append(LayoutCheck(rule_id="LAY-MARK", item=f"{what}上边缘至版心上边缘", expected=f"{exp}mm", actual=f"{dist:.1f}mm（字框上缘实测）", status="pass" if abs(dist - exp) <= 3 else "warn", clause=clause, level=level, conditional=ir.format_type in ("jiyao", "brief"), note="字形上缘与字框上缘存在差异，误差 3mm 内视为符合"))
+            g_top, how, tol, note = glyph_top(pdf, ml, red=_is_red(profile.el("organ_mark").get("color")))
+            dist = g_top - top_area
+            checks.append(LayoutCheck(rule_id="LAY-MARK", item=f"{what}上边缘至版心上边缘", expected=f"{exp}mm", actual=f"{dist:.1f}mm（{how}）", status="pass" if abs(dist - exp) <= tol else "warn", clause=clause, level=level, conditional=ir.format_type in ("jiyao", "brief"), note=note))
     if ir.format_type == "letter":
         checks += _letter_checks(pdf, first, ir, profile)
-    # 页码一字线：上距版心下边缘 7mm；单页码居右
-    pn = [l for l in first if re.fullmatch(r"[—\-－]\s*\d+\s*[—\-－]", l.text.replace(" ", ""))]
+    # 页码一字线：上距版心下边缘 7mm；单页码居右（模板可改为不加一字线，此时测页码本身）
+    dash = profile.el("page_number").get("style", "dash") != "plain"
+    if dash:
+        pn = [l for l in first if re.fullmatch(r"[—\-－]\s*\d+\s*[—\-－]", l.text.replace(" ", ""))]
+    else:
+        pn = [l for l in first if re.fullmatch(r"\d+", l.text.strip()) and l.y0_mm > bottom_area]
     if pn and ir.format_type == "letter" and not profile.data["letter"].get("first_page_number", True):
         checks.append(LayoutCheck(rule_id="LAY-PAGENO", item="信函格式首页不显示页码", expected="首页无页码", actual=f"首页显示页码“{pn[0].text}”", status="fail", clause="GB/T 9704—2012 10.1"))
     elif pn:
-        d = pn[0].yc_mm - bottom_area
+        line = pn[0]
+        y, how = line.yc_mm, "字框中线实测"
+        dash_word = next((w for w in line.words or [] if w[2][:1] in "—-－"), None) if dash else None
+        if dash_word is not None:
+            ext = ink_extent(pdf, 1, dash_word[0] * MM_PER_PT, dash_word[1] * MM_PER_PT, line.y0_mm - 1, line.y1 * MM_PER_PT + 1)
+            if ext is not None:
+                y, how = (ext[0] + ext[1]) / 2, "一字线实测"
+        d = y - bottom_area
         exp = profile.el("page_number")["dash_offset_mm"]
-        checks.append(LayoutCheck(rule_id="LAY-PAGENO", item="页码一字线上距版心下边缘", expected=f"{exp}mm", actual=f"{d:.1f}mm", status="pass" if abs(d - exp) <= 2 else "warn", clause="GB/T 9704—2012 7.5", conditional=True))
+        item = "页码一字线上距版心下边缘" if dash else "页码上距版心下边缘"
+        checks.append(LayoutCheck(rule_id="LAY-PAGENO", item=item, expected=f"{exp}mm", actual=f"{d:.1f}mm（{how}）", status="pass" if abs(d - exp) <= 2 else "warn", clause="GB/T 9704—2012 7.5", conditional=True))
         right_ok = pn[0].x1 * MM_PER_PT > (m["left_mm"] + profile.data["type_area"]["width_mm"]) - 12
         checks.append(LayoutCheck(rule_id="LAY-PAGENO-ODD", item="单页码居右空一字", expected="居右", actual="居右" if right_ok else "非居右", status="pass" if right_ok else "fail", clause="GB/T 9704—2012 7.5"))
     elif ir.format_type == "letter":

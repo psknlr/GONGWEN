@@ -8,6 +8,7 @@ from docx import Document
 from docx.oxml.ns import qn
 
 from ..schemas.layout import LayoutCheck
+from .docx_compiler import size_label
 from .profile import MM_PER_PT, LayoutProfile
 
 
@@ -45,7 +46,7 @@ def check_docx(path: Path, profile: LayoutProfile, title: str, first_body: str =
     if body:
         ls = body[0].paragraph_format.line_spacing
         pt = ls.pt if hasattr(ls, "pt") else 0
-        out.append(LayoutCheck(rule_id="DOCX-LINE", item="正文行距", expected=f"固定值约{profile.line_pt}磅（每面22行撑满版心，实务推导）", actual=f"{pt:.2f}磅", status="pass" if abs(pt - profile.line_pt) < 0.1 else "warn", clause="GB/T 9704—2012 5.2.3", level="实务", conditional=True))
+        out.append(LayoutCheck(rule_id="DOCX-LINE", item="正文行距", expected=f"固定值约{profile.line_pt}磅（每面{profile.data['grid']['lines_per_page']}行撑满版心，实务推导）", actual=f"{pt:.2f}磅", status="pass" if abs(pt - profile.line_pt) < 0.1 else "warn", clause="GB/T 9704—2012 5.2.3", level="实务", conditional=True))
     # 标题字体字号：取连续几段拼起来恰好等于标题的段落（标题可能回行为多段）；
     # 不能用“段落文字包含于标题”判断——函的发文机关标志常是标题的开头，会量成红色机关标志
     texts = [p.text for p in doc.paragraphs]
@@ -58,20 +59,28 @@ def check_docx(path: Path, profile: LayoutProfile, title: str, first_body: str =
         if t and acc == title:
             tparas = doc.paragraphs[i : j + 1]
             break
+    # 字体字号与缩进按配置档（模板）的生效参数核对：模板有意改动的项不判为不符合，偏离国标另由模板核验项列出
+    tpl = f"（模板“{profile.template}”）" if profile.template else ""
     if tparas:
         r = tparas[0].runs[0]
         rf = r._element.rPr.rFonts.get(qn("w:eastAsia")) if r._element.rPr is not None and r._element.rPr.rFonts is not None else ""
         size = r.font.size.pt if r.font.size else 0
-        exp_font = profile.font("xiaobiaosong")
-        out.append(LayoutCheck(rule_id="DOCX-TITLE", item="标题字体字号", expected=f"2号（22磅）{profile.font_category('xiaobiaosong')}", actual=f"{size:g}磅 {rf}", status="pass" if abs(size - 22) < 0.1 and rf == exp_font else "warn", clause="GB/T 9704—2012 7.3.1", conditional=True))
+        tel = profile.el("title")
+        t_font = tel.get("font", "xiaobiaosong")
+        t_pt = profile.size(tel["size"])
+        exp_font = profile.font(t_font)
+        out.append(LayoutCheck(rule_id="DOCX-TITLE", item="标题字体字号", expected=f"{size_label(tel['size'])}（{t_pt:g}磅）{profile.font_category(t_font)}{tpl}", actual=f"{size:g}磅 {rf}", status="pass" if abs(size - t_pt) < 0.1 and rf == exp_font else "warn", clause="GB/T 9704—2012 7.3.1", conditional=True))
     if body:
         r = body[0].runs[0]
         rf = r._element.rPr.rFonts.get(qn("w:eastAsia")) if r._element.rPr is not None and r._element.rPr.rFonts is not None else ""
         size = r.font.size.pt if r.font.size else 0
-        out.append(LayoutCheck(rule_id="DOCX-BODY", item="正文字体字号", expected=f"3号（16磅）{profile.font_category('fangsong')}", actual=f"{size:g}磅 {rf}", status="pass" if abs(size - 16) < 0.1 else "warn", clause="GB/T 9704—2012 7.3.3", conditional=True))
+        bel = profile.el("body")
+        b_font = bel.get("font", "fangsong")
+        out.append(LayoutCheck(rule_id="DOCX-BODY", item="正文字体字号", expected=f"{size_label(bel['size'])}（{profile.body_pt:g}磅）{profile.font_category(b_font)}{tpl}", actual=f"{size:g}磅 {rf}", status="pass" if abs(size - profile.body_pt) < 0.1 else "warn", clause="GB/T 9704—2012 7.3.3", conditional=True))
         ind = body[0].paragraph_format.first_line_indent
         chars = (ind.pt / profile.char_pitch_pt) if ind is not None else 0
-        out.append(LayoutCheck(rule_id="DOCX-INDENT", item="自然段左空二字", expected="2字", actual=f"{chars:.1f}字", status="pass" if abs(chars - 2) < 0.1 else "fail", clause="GB/T 9704—2012 7.3.3"))
+        want = float(bel.get("first_indent_chars", 2))
+        out.append(LayoutCheck(rule_id="DOCX-INDENT", item="自然段左空二字", expected=f"{want:g}字{tpl}", actual=f"{chars:.1f}字", status="pass" if abs(chars - want) < 0.1 else "fail", clause="GB/T 9704—2012 7.3.3"))
     settings = doc.settings.element
     eo = settings.find(qn("w:evenAndOddHeaders")) is not None
     out.append(LayoutCheck(rule_id="DOCX-PAGENO", item="单双页页码位置分设", expected="单页居右、双页居左", actual="已分设" if eo else "未分设", status="pass" if eo else "fail", clause="GB/T 9704—2012 7.5"))

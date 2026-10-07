@@ -1,0 +1,10 @@
+# 内置模板：使用 Windows 自带的中易字库名。
+# Windows 10 起系统自带“仿宋”“楷体”（GBK 字库，英文族名 FangSong、KaiTi），不再附带“仿宋_GB2312”“楷体_GB2312”；
+# “黑体”“宋体”与默认配置相同。字库名属实务（国标规定的是字体类别），改用这些字库名不偏离 GB/T 9704—2012。
+# 方正小标宋简体不随 Windows 附带，须另行取得方正字库授权。
+name: windows-fonts
+base: gbt9704-2012
+description: 使用 Windows 自带的仿宋、楷体、黑体、宋体字库名（方正小标宋简体须另行取得授权）
+fonts:
+  fangsong: {name: 仿宋, alternates: [FangSong, 仿宋_GB2312, STFangsong]}
+  kaiti: {name: 楷体, alternates: [KaiTi, 楷体_GB2312, STKaiti]}

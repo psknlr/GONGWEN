@@ -94,6 +94,8 @@ class LayoutConfig(GWModel):
     profile: str = "gbt9704-2012"
     margin_mode: str = Field(default="standard", description="standard/compensated")
     render_check: bool = True
+    template: str = Field(default="", description="默认公文模板（gongwen template list）；空表示按基础配置档的默认参数")
+    font_substitution: bool = Field(default=True, description="渲染预览时，未安装的公文字库以开源字体替代（只影响预览与核验，不改变 DOCX）")
 
 
 class FeatureFlags(GWModel):
@@ -240,6 +242,7 @@ max_revision_rounds = 2
 [layout]
 profile = "gbt9704-2012"
 margin_mode = "standard"     # standard：天头37mm/订口28mm；compensated：软件页边距补偿口径（实务）
+template = ""                # 默认公文模板（gongwen template list）；空为国标默认参数
 
 # 示例：使用 DeepSeek 作为起草模型、独立审校使用另一模型
 # [models.drafter]

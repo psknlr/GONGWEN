@@ -11,6 +11,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from ..layout.pipeline import layout_document
+from ..layout.templates import resolve_profile
 from ..schemas.ir import DocumentIR
 from ..schemas.layout import LayoutReport
 from ..schemas.state import Stage
@@ -28,11 +29,16 @@ class LayoutCompileSkill(Skill):
 
     def run(self, sc: SkillContext, ir: DocumentIR, out_dir: Path) -> LayoutReport:
         cfg = sc.runtime.config.layout
-        report = layout_document(ir, out_dir, profile_id=cfg.profile, margin_mode=cfg.margin_mode, render_check=cfg.render_check)
+        # 公文模板：任务创建时指定的（--template）优先，其次配置 layout.template；都没有时按基础配置档默认参数
+        template = str(sc.state.options.get("layout_template") or cfg.template or "")
+        profile = resolve_profile(template, data_dir=sc.runtime.data_dir, workspace=sc.runtime.workspace, profile_id=cfg.profile, margin_mode=cfg.margin_mode)
+        report = layout_document(ir, out_dir, profile=profile, render_check=cfg.render_check, font_substitution=cfg.font_substitution)
         sc.note(
             "skill.layout",
             {
                 "doc": f"{ir.doc_id}.v{ir.version}",
+                "template": report.template,
+                "deviations": len(report.deviations),
                 "rendered": report.render.rendered,
                 "pages": report.render.pages,
                 "failures": [c.item for c in report.failures()],

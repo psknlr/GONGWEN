@@ -37,6 +37,7 @@ gongwen = [
   "knowledge/seed/*.yaml",
   "knowledge/seed/*.json",
   "layout/profiles/*.yaml",
+  "layout/profiles/templates/*.yaml",
   "eval/cases/*.yaml",
   "eval/cases/materials/*",
   "profiles/*.yaml",

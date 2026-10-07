@@ -62,12 +62,32 @@ RED = RGBColor(0xFF, 0x00, 0x00)
 GRAY = RGBColor(0x80, 0x80, 0x80)
 PLACEHOLDER_RE = re.compile(r"(【待[^】]*】)")
 
-# 图文框内的字位（LibreOffice 实测校准，替代字体文泉驿正黑）：
-# 发文机关标志行距取 1.02 个字高时，字框上缘高出框顶约 0.147 个字高，字形下缘在框顶下约 0.975 个字高；
-# 3 号字行距 579 缇时，字框上缘在框顶下约 2.74mm
-MARK_FRAME_ASCENT = 0.147
-MARK_FRAME_INK_BOTTOM = 0.975
-BODY_FRAME_TEXT_TOP_MM = 2.74
+# 字位校准（LibreOffice 实测）。固定行距时 LibreOffice 把基线放在行顶之下 0.8 个行高处，与字体无关；汉字字形上缘约在
+# 基线之上 0.86 个字高（文泉驿正黑实测 0.855、Noto Serif CJK 0.865），也基本与字体无关。PDF 文本框（字框）的上缘则是
+# 基线减去字体的上伸度量（文泉驿正黑 0.963、Noto CJK 1.151），因字体而异——按字框校准会使版面随本机字体而变，
+# 因此下列常数都按字形（基线）校准，生成的 DOCX 与本机装了哪种字体无关；渲染核验也按栅格化后的字形测量（render_check.ink_extent）。
+# * 图文框内的发文机关标志行距取 1.02 个字高：框顶在标志上边缘之下 0.044（= 0.86 − 0.8×1.02）个字高，字形下缘在框顶下约
+#   0.945 个字高（文泉驿正黑 0.975、Noto 0.914 的折中）；
+# * 流式排列的标志（mark_line）：补入间距 0.017 个字高（流式排列另有约 0.03 个字高的下移，实测）；
+# * 3 号字行距 579 缇时，字形上缘在行顶（框顶）下约 BODY_FRAME_TEXT_TOP_MM（= 0.8×28.95 − 0.86×16 磅）；
+# * 页码：按一字线字形的中线校准（FOOTER_PAD_MM；原按字框中线为 0.8mm，一字线实测比字框中线低约 0.6mm）。
+# 2026-10 以前按文泉驿正黑的字框上缘校准（0.147、0.13、2.74mm），字形实际比要求低约 1.3～1.5mm；改用 Noto 等开源替代字体
+# 渲染后字框上移 2.3～2.4mm 而字形位置不变，故改为按字形校准。
+# 实测（2026-10，LibreOffice 24.2，字形上缘／一字线中线；前后两值分别为 Noto 替代字体与文泉驿正黑）：标志 34.9～35.1mm、
+# 信函标志 30.0～30.1mm、命令标志 19.8～19.9mm、信函发文字号距双线 4.8～5.1mm（要求 4.9mm）、双线距标志 4.4～3.7mm（要求 4mm）、
+# 页码一字线 6.9～7.0mm（要求 7mm）。
+MARK_FRAME_ASCENT = 0.044
+MARK_FRAME_INK_BOTTOM = 0.945
+BODY_FRAME_TEXT_TOP_MM = 3.32
+MARK_FLOW_ASCENT = 0.017
+FOOTER_PAD_MM = 0.3
+
+_HAO = {"初号": "初号", "小初": "小初", "一号": "1号", "小一": "小1号", "二号": "2号", "小二": "小2号", "三号": "3号", "小三": "小3号", "四号": "4号", "小四": "小4号"}
+
+
+def size_label(name: str) -> str:
+    """字号名的阿拉伯数字写法（“二号”→“2号”），用于核验说明。"""
+    return _HAO.get(name, name)
 
 
 class Compiler:
@@ -83,12 +103,22 @@ class Compiler:
         self.fonts_used: set[str] = set()
 
     # ------------------------------------------------------------------ 底层工具
+    @property
+    def body_font(self) -> str:
+        return self.p.el("body").get("font", "fangsong")
+
+    @property
+    def body_size(self) -> str:
+        return self.p.el("body")["size"]
+
     def font_name(self, key: str) -> str:
         name = self.p.font(key) if key in self.p.data["fonts"] else key
         self.fonts_used.add(name)
         return name
 
-    def set_run(self, run, font: str = "fangsong", size: str | float = "三号", color: RGBColor | None = None, bold: bool = False, spacing: bool = True, highlight: bool = False) -> None:
+    def set_run(self, run, font: str | None = None, size: str | float | None = None, color: RGBColor | None = None, bold: bool = False, spacing: bool = True, highlight: bool = False) -> None:
+        font = font or self.body_font
+        size = size or self.body_size
         pt = self.p.size(size) if isinstance(size, str) else float(size)
         name = self.font_name(font)
         run.font.size = Pt(pt)
@@ -109,12 +139,13 @@ class Compiler:
             hl.set(qn("w:val"), "yellow")
             insert_ordered(rpr, hl, RPR_SEQ)
 
-    def zi(self, n: float, size: str = "三号") -> Pt:
+    def zi(self, n: float, size: str | None = None) -> Pt:
         """n 个字宽（国标 3.1：一字指一个汉字宽度的距离）。"""
+        size = size or self.body_size
         pitch = self.p.char_pitch_pt if size == self.p.el("body")["size"] else self.p.size(size)
         return Pt(n * pitch)
 
-    def para(self, text: str = "", font: str = "fangsong", size: str = "三号", align=None, first: float = 0, left: float = 0, right: float = 0, line_pt: float | None = None, color=None, bold=False, keep_next=False):
+    def para(self, text: str = "", font: str | None = None, size: str | None = None, align=None, first: float = 0, left: float = 0, right: float = 0, line_pt: float | None = None, color=None, bold=False, keep_next=False):
         par = self.doc.add_paragraph()
         self.no_grid(par)
         pf = par.paragraph_format
@@ -151,7 +182,7 @@ class Compiler:
     def short_placeholder(text: str, short: str) -> str:
         return short if text.startswith("【待") and len(text) > len(short) else text
 
-    def add_text(self, par, text: str, font: str = "fangsong", size: str = "三号", color=None, bold=False) -> None:
+    def add_text(self, par, text: str, font: str | None = None, size: str | None = None, color=None, bold=False) -> None:
         for part in PLACEHOLDER_RE.split(text):
             if not part:
                 continue
@@ -245,8 +276,8 @@ class Compiler:
         s.left_margin, s.right_margin = Mm(m["left"]), Mm(m["right"])
         pn = self.p.el("page_number")
         num_mm = self.p.size(pn["size"]) * MM_PER_PT
-        # 一字线上距版心下边缘 7mm（推算页脚距离：页高 − 版心下边缘 − 7mm − 半个字高）
-        footer_mm = page["height_mm"] - (self.p.data["margins"]["top_mm"] + self.p.data["type_area"]["height_mm"]) - pn["dash_offset_mm"] - num_mm * 0.5 - 0.8  # 0.8mm 为字框留白的实测校准
+        # 一字线上距版心下边缘 7mm（推算页脚距离：页高 − 版心下边缘 − 7mm − 半个字高）；FOOTER_PAD_MM 为字框留白的实测校准
+        footer_mm = page["height_mm"] - (self.p.data["margins"]["top_mm"] + self.p.data["type_area"]["height_mm"]) - pn["dash_offset_mm"] - num_mm * 0.5 - FOOTER_PAD_MM
         s.footer_distance = Mm(max(5.0, footer_mm))
         s.header_distance = Mm(12)
         sect = s._sectPr
@@ -257,13 +288,13 @@ class Compiler:
         grid.set(qn("w:type"), "lines")
         grid.set(qn("w:linePitch"), str(int(round(self.p.line_pt * 20))))
         sect.append(grid)
-        # 默认样式：3号仿宋
+        # 默认样式：正文字体字号（国标一般为 3 号仿宋）
         st = self.doc.styles["Normal"]
         st.font.size = Pt(self.p.body_pt)
         rpr = st.element.get_or_add_rPr()
         rf = rpr.get_or_add_rFonts()
         for attr in ("w:eastAsia", "w:ascii", "w:hAnsi"):
-            rf.set(qn(attr), self.font_name("fangsong"))
+            rf.set(qn(attr), self.font_name(self.body_font))
         # 奇偶页不同页脚
         settings = self.doc.settings.element
         if settings.find(qn("w:evenAndOddHeaders")) is None:
@@ -275,6 +306,7 @@ class Compiler:
         size = pn["size"]
         font = pn["font"]
         indent = Pt(pn["indent_chars"] * self.p.size(size))
+        dash = pn.get("style", "dash") != "plain"  # 模板可改为不加一字线（偏离 7.5，模板偏离中列出）
         for footer, align in ((s.footer, WD_ALIGN_PARAGRAPH.RIGHT), (s.even_page_footer, WD_ALIGN_PARAGRAPH.LEFT)):
             par = footer.paragraphs[0]
             par.alignment = align
@@ -282,11 +314,13 @@ class Compiler:
                 par.paragraph_format.right_indent = indent
             else:
                 par.paragraph_format.left_indent = indent
-            r = par.add_run("— ")
-            self.set_run(r, font, size, spacing=False)
+            if dash:
+                r = par.add_run("— ")
+                self.set_run(r, font, size, spacing=False)
             self.field(par, "PAGE", font, size)
-            r = par.add_run(" —")
-            self.set_run(r, font, size, spacing=False)
+            if dash:
+                r = par.add_run(" —")
+                self.set_run(r, font, size, spacing=False)
         no_first_number = self.ir.format_type == "letter" and not self.p.data["letter"].get("first_page_number", True)
         if no_first_number:
             s.different_first_page_header_footer = True
@@ -314,17 +348,24 @@ class Compiler:
         cap = self.p.size(max_size or self.p.el("organ_mark")["max_size"])
         return min(cap, (self.p.type_width_pt * 0.96) / max(1.0, text_width_chars(mark or "文")))
 
+    @property
+    def mark_font(self) -> str:
+        return self.p.el("organ_mark").get("font", "xiaobiaosong")
+
+    @property
+    def mark_color(self) -> RGBColor:
+        return RGBColor.from_string(str(self.p.el("organ_mark").get("color", "FF0000")).lstrip("#").upper())
+
     def mark_line(self, mark: str, top_mm: float, size_pt: float, lines_used: int = 0) -> None:
         """红色小标宋的发文机关标志（简报名称）居中，上边缘至版心上边缘 top_mm；其上已排 lines_used 行。"""
-        # 固定行距小于字体自然行高时，字框上缘会高出行顶约 0.13 个字高（LibreOffice 实测校准，网格行距 579 缇），
-        # 补入间距，使字上缘落在 top_mm 处
-        gap_pt = top_mm / MM_PER_PT - lines_used * self.p.line_pt + (0.13 * size_pt if mark else 0)
+        # 按字形校准（见 MARK_FLOW_ASCENT）：补入间距，使字形上缘落在 top_mm 处
+        gap_pt = top_mm / MM_PER_PT - lines_used * self.p.line_pt + (MARK_FLOW_ASCENT * size_pt if mark else 0)
         if gap_pt > 1:
             self.para(line_pt=gap_pt)
         if mark:
             par = self.para(align=WD_ALIGN_PARAGRAPH.CENTER, line_pt=size_pt * 1.02)
             run = par.add_run(mark)
-            self.set_run(run, "xiaobiaosong", size_pt, color=RED, spacing=False)
+            self.set_run(run, self.mark_font, size_pt, color=self.mark_color, spacing=False)
 
     def header_block(self) -> None:
         ir, h = self.ir, self.ir.header
@@ -353,34 +394,38 @@ class Compiler:
         self.mark_line(mark, top_mm, self.mark_size(mark), lines_used)
         if fmt in ("jiyao",):
             rule = self.para(line_pt=self.p.line_pt)
-            self.border(rule, "bottom", "FF0000", self.p.el("red_rule")["width_pt"], 0)
+            rr = self.p.el("red_rule")
+            self.border(rule, "bottom", rr.get("color", "FF0000"), rr["width_pt"], 0)
             self.blank(1)
             return
+        dn = self.p.el("doc_number")
+        dn_font, dn_size = dn.get("font", self.body_font), dn.get("size", self.body_size)
         if fmt == "command":
             # 命令（令）格式（10.2）：发文机关标志下空二行居中编排令号，令号下空二行编排正文；不设分隔线与标题
             n = self.p.data["command"]["number_blank_lines"]
             self.blank(n)
-            self.para(self.short_placeholder(h.doc_number, "第【待编号】号"), align=WD_ALIGN_PARAGRAPH.CENTER)
+            self.para(self.short_placeholder(h.doc_number, "第【待编号】号"), font=dn_font, size=dn_size, align=WD_ALIGN_PARAGRAPH.CENTER)
             self.blank(n)
             return
-        self.blank(self.p.el("doc_number")["blank_lines_after_mark"])
+        self.blank(dn["blank_lines_after_mark"])
         upward = ir.direction == "上行文"
         doc_number = self.short_placeholder(h.doc_number, "【待编号】")
         if upward:
+            sg = self.p.el("signer")
             par = self.para(first=1)
-            self.add_text(par, doc_number)
+            self.add_text(par, doc_number, font=dn_font, size=dn_size)
             tab_pos = Pt(self.p.type_width_pt - self.p.char_pitch_pt)
             par.paragraph_format.tab_stops.add_tab_stop(tab_pos, WD_TAB_ALIGNMENT.RIGHT)
             r = par.add_run("\t签发人：")
-            self.set_run(r, "fangsong", "三号")
+            self.set_run(r, sg.get("label_font", "fangsong"), sg.get("size", self.body_size))
             signers = "　".join(h.signers) if h.signers else "【待签发人】"
             for part in PLACEHOLDER_RE.split(signers):
                 if part:
                     rr = par.add_run(part)
-                    self.set_run(rr, "kaiti", "三号", highlight=bool(PLACEHOLDER_RE.fullmatch(part)))
+                    self.set_run(rr, sg.get("name_font", "kaiti"), sg.get("size", self.body_size), highlight=bool(PLACEHOLDER_RE.fullmatch(part)))
         else:
             par = self.para(align=WD_ALIGN_PARAGRAPH.CENTER)
-            self.add_text(par, doc_number)
+            self.add_text(par, doc_number, font=dn_font, size=dn_size)
         rr = self.p.el("red_rule")
         self.border(par, "bottom", rr["color"], rr["width_pt"], rr["below_doc_number_mm"] / MM_PER_PT)
 
@@ -399,7 +444,7 @@ class Compiler:
             size_mm = size_pt * MM_PER_PT
             par = self.para(align=WD_ALIGN_PARAGRAPH.CENTER, line_pt=size_pt * 1.02)
             run = par.add_run(mark)
-            self.set_run(run, "xiaobiaosong", size_pt, color=RED, spacing=False)
+            self.set_run(run, self.mark_font, size_pt, color=self.mark_color, spacing=False)
             frame_y = y + MARK_FRAME_ASCENT * size_mm
             self.frame(par, frame_y, self.p.data["type_area"]["width_mm"])
             y = frame_y + MARK_FRAME_INK_BOTTOM * size_mm  # 标志下边缘
@@ -412,6 +457,8 @@ class Compiler:
         if not (lefts or doc_number):
             return
         # 第一个要素与发文字号同排一行（左、右），其余要素自上而下分行；字框上缘距第一条双线 7/8 个 3 号字高
+        dn = self.p.el("doc_number")
+        dn_font, dn_size = dn.get("font", self.body_font), dn.get("size", self.body_size)
         el_y = rule_y + rule_h + lt["element_gap_ratio"] * self.p.body_pt * MM_PER_PT - BODY_FRAME_TEXT_TOP_MM
         for i in range(max(1, len(lefts))):
             par = self.para()
@@ -421,7 +468,7 @@ class Compiler:
                 self.add_text(par, val, font=el["font"], size=el["size"])
             if i == 0 and doc_number:
                 par.paragraph_format.tab_stops.add_tab_stop(Pt(self.p.type_width_pt), WD_TAB_ALIGNMENT.RIGHT)
-                self.add_text(par, f"\t{doc_number}")
+                self.add_text(par, f"\t{doc_number}", font=dn_font, size=dn_size)
             self.frame(par, el_y, self.p.data["type_area"]["width_mm"])
 
     def brief_header(self) -> None:
@@ -456,7 +503,7 @@ class Compiler:
             self.blank(before)
             issuer = self.ir.signature.organs[0] if self.ir.signature.organs else ""
             for line in split_title(self.ir.title, el["max_chars_per_line"], issuer):
-                self.para(line, font="xiaobiaosong", size=el["size"], align=WD_ALIGN_PARAGRAPH.CENTER, keep_next=True)
+                self.para(line, font=el.get("font", "xiaobiaosong"), size=el["size"], align=WD_ALIGN_PARAGRAPH.CENTER, keep_next=True)
         if self.ir.title_note:
             # 题注（实务）：标题下居中，楷体 3 号；一行排不下时均衡回行，不让“通过）”之类的短尾单独成行
             tn = self.p.el("title_note")
@@ -475,11 +522,12 @@ class Compiler:
 
     def body_block(self, blocks: list[Block]) -> None:
         levels = self.p.el("levels")
+        indent = self.p.el("body").get("first_indent_chars", 2)
         for b in blocks:
             if b.kind == "heading":
-                font = levels.get(b.level, "fangsong")
+                font = levels.get(b.level, levels.get(str(b.level), self.body_font))
                 # 只有单独成段的层次标题才与下段同页；带正文的列项（如“（一）……。”）若也设，会连成一串把整段推到下一面
-                par = self.para(first=2, keep_next=not (b.inline_heading and b.sentences))
+                par = self.para(first=indent, keep_next=not (b.inline_heading and b.sentences))
                 self.add_text(par, f"{b.label}{b.heading}", font=font)
                 if b.inline_heading and b.sentences:
                     self.add_text(par, "".join(s.text for s in b.sentences))
@@ -488,7 +536,7 @@ class Compiler:
             else:
                 text = b.text()
                 if text:
-                    self.para(text, first=2)
+                    self.para(text, first=indent)
 
     def table(self, rows: list[list[str]]) -> None:
         ncols = max(len(r) for r in rows)
@@ -599,8 +647,9 @@ class Compiler:
             label = "附件" if len(self.ir.attachments) == 1 and len(self.ir.attachment_notes) <= 1 else f"附件{att.seq}"
             self.para(label, font=el["label_font"], size=el["size"])
             self.blank(1)
-            for line in split_title(att.title, self.p.el("title")["max_chars_per_line"]):
-                self.para(line, font="xiaobiaosong", size=self.p.el("title")["size"], align=WD_ALIGN_PARAGRAPH.CENTER)
+            tel = self.p.el("title")
+            for line in split_title(att.title, tel["max_chars_per_line"]):
+                self.para(line, font=tel.get("font", "xiaobiaosong"), size=tel["size"], align=WD_ALIGN_PARAGRAPH.CENTER)
             self.blank(1)
             self.body_block(att.blocks)
 
@@ -702,7 +751,7 @@ class Compiler:
             for part in PLACEHOLDER_RE.split(text):
                 if part:
                     r = par.add_run(part)
-                    self.set_run(r, "fangsong", size, spacing=False, highlight=bool(PLACEHOLDER_RE.fullmatch(part)))
+                    self.set_run(r, el.get("font", "fangsong"), size, spacing=False, highlight=bool(PLACEHOLDER_RE.fullmatch(part)))
 
     # ------------------------------------------------------------------
     def compile(self, path: str | Path) -> Path:
@@ -725,7 +774,8 @@ class Compiler:
         cp.subject = f"{self.ir.genre or self.ir.material_type or ''}｜{self.ir.status.value}"
         if self.imported:
             cp.keywords = "公文智能体;排版;内容未经系统核验;须人工审核"
-            cp.comments = f"本稿由公文智能体按 {self.p.id} 排版，正文内容来自外部文稿、未经本系统核验，须经人工审核。"
+            basis = f"{self.p.id}（模板：{self.p.template}）" if self.p.template else self.p.id
+            cp.comments = f"本稿由公文智能体按 {basis} 排版，正文内容来自外部文稿、未经本系统核验，须经人工审核。"
             cp.author = "GONGWEN 公文智能体（排版）"
         else:
             cp.keywords = "公文智能体;AI辅助起草;须人工审核"

@@ -166,6 +166,16 @@ def _material_paths(items: list[str] | None) -> list[Path]:
     return [Path(m) for m in items or []]
 
 
+def _template_option(eng, name: str | None) -> dict[str, Any] | None:
+    """--template：先确认模板存在且合规（不合规时不创建任务），再记入任务选项，排版时使用。"""
+    if not name:
+        return None
+    from ..layout.templates import TemplateStore
+
+    TemplateStore(eng.rt.data_dir, eng.rt.workspace).get(name)
+    return {"layout_template": name}
+
+
 def _add_materials(eng, task_id: str, paths: list[Path], user, declared, echo: bool = False) -> list[dict[str, Any]]:
     """逐个添加材料，返回被禁止进入当前环境（已清除）的材料。"""
     from ..schemas.common import AdmissionDecision
@@ -233,10 +243,7 @@ def cmd_doctor(args) -> int:
     tools = tools_available()
     for k, v in tools.items():
         print(f"  [{'ok' if v else '--'}] {k}{'：' + v if v else '（未安装：无法做实际渲染核验，排版结果将标注“未核验”）'}")
-    fams = installed_font_families()
-    for f in ("仿宋_GB2312", "楷体_GB2312", "黑体", "方正小标宋简体", "宋体"):
-        hit = any(f in x for x in fams)
-        print(f"  [{'ok' if hit else '--'}] 字体 {f}{'' if hit else '（未安装：渲染时会被替代，报告中会标明）'}")
+    _doctor_fonts(cfg, rt.workspace, installed_font_families)
     router = rt.router()
     for role, desc in router.describe().items():
         print(f"  模型 {role}：{desc}")
@@ -247,6 +254,29 @@ def cmd_doctor(args) -> int:
     inst = rt.instructions()
     print(f"  办文说明（GONGWEN.md/AGENTS.md）：{'已加载 ' + str(len(inst)) + ' 字' if inst else '未找到'}")
     return EXIT_OK if ok else EXIT_FAIL
+
+
+def _doctor_fonts(cfg, workspace, installed_font_families) -> None:
+    """按当前模板（layout.template）逐类核对字库：族名逐字核对，并说明渲染预览时的替代字体。"""
+    from ..layout import fonts
+    from ..layout.templates import resolve_profile
+
+    try:
+        profile = resolve_profile(cfg.layout.template or None, data_dir=cfg.environment.data_dir, workspace=workspace, profile_id=cfg.layout.profile, margin_mode=cfg.layout.margin_mode)
+    except (KeyError, ValueError) as exc:
+        print(f"  [--] 公文模板 {cfg.layout.template}：无法加载（{str(exc).splitlines()[0]}），以下按国标默认字库名核对")
+        profile = resolve_profile(None, data_dir=cfg.environment.data_dir)
+    if not fonts.fc_available():
+        fams = installed_font_families()
+        for r in fonts.ROLES:
+            f = profile.font(r)
+            print(f"  [{'ok' if f in fams else '--'}] 字体 {f}{'' if f in fams else '（未安装：渲染时会被替代，报告中会标明）'}")
+        return
+    basis = f"模板“{profile.template}”" if profile.template else "国标默认字库名"
+    for rc in fonts.check_roles(profile.data["fonts"], mapping=cfg.layout.font_substitution):
+        mark = "ok" if rc.exact else ("备选" if rc.alternate else "--")
+        print(f"  [{mark}] 字体 {rc.name}（{rc.category}，{basis}）：{rc.summary()}")
+    print("  字库为授权字库，本系统不下载；安装本单位合法取得的字库：gongwen fonts install --from <目录>；详情：gongwen fonts check")
 
 
 def cmd_config_show(args) -> int:
@@ -266,7 +296,8 @@ def cmd_task_new(args) -> int:
     hints = {k: v for k, v in {"recipients": args.to, "issuer_type": args.issuer, "genre": args.genre}.items() if v}
     declared = _clearance(args.clearance)
     paths = _material_paths(args.material)
-    st = eng.create_task(args.request, by=user, matter_id=args.matter, hints=hints)
+    opts = _template_option(eng, getattr(args, "template", None))
+    st = eng.create_task(args.request, by=user, matter_id=args.matter, hints=hints, options=opts)
     forbidden = _add_materials(eng, st.task_id, paths, user, declared, echo=True)
     if args.json:
         emit_json({"task_id": st.task_id, "matter_id": st.matter_id, "forbidden_materials": forbidden})
@@ -428,7 +459,8 @@ def cmd_exec(args) -> int:
     hints = {k: v for k, v in {"recipients": args.to, "issuer_type": args.issuer, "genre": args.genre}.items() if v}
     declared = _clearance(args.clearance)
     paths = _material_paths(args.material)
-    st = eng.create_task(args.request, by=user, matter_id=args.matter, hints=hints)
+    opts = _template_option(eng, getattr(args, "template", None))
+    st = eng.create_task(args.request, by=user, matter_id=args.matter, hints=hints, options=opts)
     forbidden = _add_materials(eng, st.task_id, paths, user, declared)
     # 给出的材料全部被禁止进入当前环境（已清除）：不再推进，不能凭占位稿走到人工送审
     all_forbidden = bool(paths) and len(forbidden) == len(paths)
@@ -586,9 +618,13 @@ def cmd_check(args) -> int:
 def cmd_format(args) -> int:
     from ..importer import ir_from_file
     from ..layout.pipeline import layout_document
+    from ..layout.templates import resolve_profile
     from ..runtime import build_runtime
 
     rt = build_runtime(workspace_of(args), profile=args.profile)
+    lc = rt.config.layout
+    # 公文模板：--template 优先，其次配置 layout.template；都没有时按国标默认参数（与以往相同）
+    profile = resolve_profile(getattr(args, "template", None) or lc.template or None, data_dir=rt.data_dir, workspace=rt.workspace, profile_id=lc.profile, margin_mode=args.margin or lc.margin_mode)
     p = Path(args.file)
     ir = ir_from_file(p.name, p.read_bytes(), genre=args.genre)
     _import_warnings(ir)
@@ -597,12 +633,14 @@ def cmd_format(args) -> int:
     # 输出目录就是原稿所在目录且同名时（如 -o .），输出文件加后缀，绝不覆盖原稿
     if any((out / f"{stem}{ext}").resolve() == p.resolve() for ext in (".docx", ".html", ".md", ".pdf")):
         stem += ".排版"
-    report = layout_document(ir, out, profile_id=rt.config.layout.profile, margin_mode=args.margin or rt.config.layout.margin_mode, render_check=not args.no_render, stem=stem)
+    report = layout_document(ir, out, profile=profile, render_check=not args.no_render, stem=stem, font_substitution=lc.font_substitution)
     if args.json:
         emit_json(json.loads(report.model_dump_json()))
     else:
         for o in report.outputs:
             print(f"输出 {o.kind}：{o.path}")
+        if report.template:
+            print(f"模板：{report.template}（偏离 GB/T 9704—2012 {len(report.deviations)} 项，逐项见下）")
         for c in report.checks:
             if c.status != "pass":
                 print(f"  [{c.status}] {c.item}：要求 {c.expected}；实际 {c.actual}（{c.clause}{'，条件性' if c.conditional else ''}）")
@@ -806,6 +844,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--matter", help="事项编号（同一事项多份文稿共享事实账本）")
     p.add_argument("--material", action="append", help="材料文件（可重复）")
     p.add_argument("--clearance", help="申报材料属性：公开/内部/敏感/工作秘密")
+    p.add_argument("--template", help="排版使用的公文模板（gongwen template list；默认 layout.template）")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_task_new)
     p = t.add_parser("add", help="添加材料")
@@ -886,6 +925,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--genre")
     p.add_argument("--matter")
     p.add_argument("--accept", action="append", help="自动接受：task_confirm,outline_confirm,conflict,review_escalation（逗号分隔或重复给出）")
+    p.add_argument("--template", help="排版使用的公文模板（gongwen template list；默认 layout.template）")
     p.add_argument("--json", action="store_true", help="以 NDJSON 输出事件流与最终结果")
     p.set_defaults(func=cmd_exec)
 
@@ -918,6 +958,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--genre")
     p.add_argument("--margin", choices=["standard", "compensated"])
     p.add_argument("--no-render", action="store_true", help="不做实际渲染核验")
+    p.add_argument("--template", help="按该公文模板排版（gongwen template list；默认 layout.template）")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_format)
 
@@ -974,6 +1015,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--out", help="报告输出目录")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_eval)
+
+    from .layout_cmds import add_layout_commands
+
+    add_layout_commands(sub)  # fonts / template / preview
     return ap
 
 
