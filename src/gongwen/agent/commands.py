@@ -29,6 +29,11 @@ HELP = """斜杠命令（人工通道）：
   /edit <句号> <新句子>           人工改写一句（系统检查语义变化）
   /fact <事实编号> <新值> [理由]   关键事实变更（联动正文、合计与附件）
   /proposals                     待采纳的修改建议    /apply <建议编号>    /reject <建议编号> [理由]
+  /locks [lock|unlock|reset <句号>…] [ai <改写要求>]   固定句：查看、锁定、解锁，或由模型补充标定
+  /rewrite <改写要求> [--ai]       按提示词改写未锁定的句子（--ai 先由模型标定固定句），只形成建议
+  /rewrite-apply [改写编号] [建议编号…] [--all]   采纳改写建议（--all 含需人工确认的）
+  /rewrite-discard [改写编号]      放弃改写建议
+  /import <修改稿文件> [--apply]   回读在 Word 中修改的稿件：逐句比对，--apply 提交为人工修订
   /check <文件>                  检查一份已有文稿     /policy <检索词>
   /serve                         启动本地审阅工作台   /out                 输出文件位置
   /help  /quit
@@ -90,7 +95,7 @@ class HumanCommands:
         if not line.startswith("/"):
             return "（不是斜杠命令）"
         cmd, _, rest = line[1:].partition(" ")
-        fn = getattr(self, f"c_{cmd}", None)
+        fn = getattr(self, f"c_{cmd.replace('-', '_')}", None)
         if fn is None:
             return visible(f"未知命令：/{cmd}。输入 /help 查看可用命令")
         # 输出中的建议、需求、文稿可能来自模型通道：控制字符一律显示为可见转义
@@ -254,6 +259,84 @@ class HumanCommands:
         pid, _, note = rest.partition(" ")
         self.engine.reject_proposal(self._need_task(), pid, by=self.human, note=note)
         return f"已拒绝修改建议 {pid}"
+
+    def c_locks(self, rest: str) -> str:
+        tid = self._need_task()
+        pos = _split(rest)
+        notes: list[str] = []
+        if pos and pos[0] in ("lock", "unlock", "reset"):
+            if len(pos) < 2:
+                raise ValueError(f"用法：/locks {pos[0]} <句号>…")
+            locks = self.engine.set_sentence_locks(tid, by=self.human, **{pos[0]: pos[1:]})
+        elif pos and pos[0] == "ai":
+            r = self.engine.calibrate_locks(tid, by=self.human, prompt=rest.split("ai", 1)[1].strip())
+            locks, notes = r["locks"], r["notes"]
+        elif pos:
+            raise ValueError("用法：/locks [lock|unlock|reset <句号>…] [ai <改写要求>]")
+        else:
+            locks = self.engine.sentence_locks(tid)
+        src = {"auto": "规则", "model": "模型", "human": "人工"}
+        lines = [f"{'🔒' if lk['locked'] else '  '} {lk['sid']} {visible(lk['text'])[:46]}" + (f"  ［{src.get(lk['source'], lk['source'])}］{lk['reason']}" if lk["locked"] or lk["source"] == "human" else "") for lk in locks]
+        n = sum(lk["locked"] for lk in locks)
+        return "\n".join(lines + [f"共 {len(locks)} 句：固定 {n} 句，可改写 {len(locks) - n} 句"] + [f"说明：{x}" for x in notes])
+
+    def _fmt_rewrite(self, r: dict) -> str:
+        label = {"proposed": "可采纳", "needs_human": "需人工确认", "rejected": "已拒绝"}
+        out = [f"改写 {r['rewrite_id']}（第 {r['version']} 版；固定 {r['locked']} 句，可改写 {r['editable']} 句）：{r['status']}"]
+        for p in r["patches"]:
+            out += [f"[{label.get(p['status'], p['status'])}] {p['patch_id']} {p['target']}", f"  原：{visible(p['before'])}", f"  改：{visible(p['after']) or '（删除整句）'}", f"  {visible(p['reason'])}"]
+        out += [f"说明：{x}" for x in r.get("notes", [])]
+        if r["status"] == "pending":
+            out.append(f"采纳：/rewrite-apply {r['rewrite_id']} [建议编号…] [--all]；放弃：/rewrite-discard {r['rewrite_id']}")
+        return "\n".join(out)
+
+    def c_rewrite(self, rest: str) -> str:
+        pos, opts = _flags(_split(rest), set(), {"ai"})
+        prompt = " ".join(pos).strip()
+        if not prompt:
+            raise ValueError("用法：/rewrite <改写要求> [--ai]")
+        return self._fmt_rewrite(self.engine.rewrite(self._need_task(), by=self.human, prompt=prompt, ai_calibrate=bool(opts.get("ai"))))
+
+    def _rewrite_id(self, tokens: list[str]) -> tuple[str, list[str]]:
+        if tokens and tokens[0].startswith("RW-"):
+            return tokens[0], tokens[1:]
+        r = self.engine.rewrite_result(self._need_task())
+        if r is None:
+            raise ValueError("还没有改写建议")
+        return r["rewrite_id"], tokens
+
+    def c_rewrite_apply(self, rest: str) -> str:
+        pos, opts = _flags(_split(rest), set(), {"all"})
+        rid, ids = self._rewrite_id(pos)
+        res = self.engine.apply_rewrite(self._need_task(), rid, by=self.human, patch_ids=ids or None, include_flagged=bool(opts.get("all")))
+        head = f"已采纳 {len(res['applied'])} 条改写建议" + (f"；跳过：{'；'.join(res['skipped'])}" if res["skipped"] else "")
+        return head + "\n" + self._advance()
+
+    def c_rewrite_discard(self, rest: str) -> str:
+        rid, _ = self._rewrite_id(_split(rest))
+        self.engine.discard_rewrite(self._need_task(), rid, by=self.human)
+        return f"已放弃改写 {rid}，原稿未改动"
+
+    def c_import(self, rest: str) -> str:
+        pos, opts = _flags(_split(rest), set(), {"apply"})
+        if not pos:
+            raise ValueError("用法：/import <修改稿文件> [--apply]")
+        path = Path(pos[0]).expanduser()
+        path = path if path.is_absolute() else (self.workspace / path)
+        if not path.is_file():
+            raise FileNotFoundError(f"文件不存在：{pos[0]}")
+        tid = self._need_task()
+        data = path.read_bytes()
+        res = self.engine.import_edited(tid, path.name, data, by=self.human) if opts.get("apply") else self.engine.compare_edited(tid, path.name, data)
+        out = [f"与第 {res['version']} 版比对：改动 {len(res['edits'])} 句，删除 {len(res['deletes'])} 句，未改动 {res['unchanged']} 句"]
+        out += [f"[改动] {e['sid']}\n  原：{visible(e['before'])}\n  新：{visible(e['text'])}" for e in res["edits"]]
+        out += [f"[删除] {d['sid']}\n  原：{visible(d['before'])}" for d in res["deletes"]]
+        out += [f"说明：{x}" for x in res["notes"]]
+        if res.get("applied"):
+            out.append(self._advance())
+        elif res["edits"] or res["deletes"]:
+            out.append("确认无误后加 --apply 提交为人工修订")
+        return "\n".join(out)
 
     def c_check(self, rest: str) -> str:
         from ..importer import check_external, ir_from_file

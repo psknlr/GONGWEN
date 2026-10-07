@@ -317,3 +317,26 @@ def test_workbench_import_route_validates_input(live):
     assert code == 200 and len(j["edits"]) == 1 and eng.load_state(tid).current_version == j["version"]
     code, j = _post(base + "/api/import-edited", {"task_id": tid, "filename": "a.docx", "data_b64": data, "apply": True}, token)
     assert code == 200 and j["applied"] and "统筹协调。" in eng.current_ir(eng.load_state(tid)).full_text()
+
+
+def test_chat_slash_commands_for_locks_rewrite_and_import(tmp_path):
+    from gongwen.agent.commands import HumanCommands
+
+    eng, user, tid = _task(tmp_path / "ws")
+    cmds = HumanCommands(eng, user, tmp_path)
+    cmds._use(tid)
+    assert "固定 1 句" in cmds.run("/locks")
+    duty = _sid(eng, tid, "负责统筹协调")
+    assert "［人工］" in cmds.run(f"/locks lock {duty}")
+    out = cmds.run("/rewrite 语言更简洁有力")
+    assert "已拒绝" in out and "固定句不得改写（人工锁定）" in out and "/rewrite-apply RW-" in out
+    assert cmds.run("/rewrite-apply") == "未执行：没有可采纳的改写建议"  # 只剩需人工确认与已拒绝的建议
+    cmds.run(f"/locks reset {duty}")
+    out = cmds.run("/rewrite 语言更简洁有力")
+    assert "可采纳" in out
+    assert "已采纳 1 条改写建议" in cmds.run("/rewrite-apply")
+    (tmp_path / "修改稿.docx").write_bytes(_edited_docx(_docx_of(eng, tid), {"并做好技术指导工作": "并做好技术指导和督促检查工作"}))
+    out = cmds.run("/import 修改稿.docx")
+    assert "改动 1 句" in out and "--apply" in out
+    out = cmds.run("/import 修改稿.docx --apply")
+    assert "督促检查" in eng.current_ir(eng.load_state(tid)).full_text()

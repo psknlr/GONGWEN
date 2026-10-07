@@ -44,6 +44,8 @@ gongwen task rewrite-discard <任务> RW-001
 gongwen task rewrite <任务> -p "……" --apply safe         # 生成后直接采纳可采纳的建议
 ```
 
+对话模式（`gongwen chat`）中用斜杠命令：`/locks`、`/locks lock s-003`、`/locks ai <改写要求>`、`/rewrite <改写要求> [--ai]`、`/rewrite-apply [建议编号…] [--all]`、`/rewrite-discard`、`/import 修改稿.docx [--apply]`。模型助手不能执行这些命令。
+
 ## 四、工作台
 
 `gongwen serve` 打开任务页，右侧“改写”页：
