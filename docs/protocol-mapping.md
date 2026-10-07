@@ -58,7 +58,7 @@
 | 6 提纲与措施表；候选方案仅在材料含多种规模时提出 | `OutlinePlan`、`AlternativePlan`；提纲确认节点 | GR-15 |
 | 7 受约束生成；确定性检查 + 语义审校（独立上下文）+ 人工；结构化问题报告；自动修订两轮 | `DraftingSkill._validate`；`IndependentReviewSkill`（新建检查上下文，模型意见须定位）；`ReviewIssue`；`budget.max_revision_rounds=2` | FB-14、SR-07；消融 no_independent_review |
 | 8 定向修订；关键事实变更联动；已审批版本实质修改须复审 | `RevisionSkill.apply_fact_change/propagate_values/human_edit/propose`（按位置替换，只改引用该事实或同一小句出现其属性的数字）；`Engine._revise` 使审批失效 | SR-01～05、SR-17；消融 no_targeted_revision |
-| 9 DocumentIR → 版式编译；条件性规则；实际渲染检查；字体替代如实报告；不填成文日期与文号 | `layout/`（`docx_checks` 回读、`render_check` 渲染测量、字体替代检查）；占位字段 | `test_engine_e2e::test_render_check_with_libreoffice`；FL-14 |
+| 9 DocumentIR → 版式编译；条件性规则；实际渲染检查；字体替代如实报告；不填成文日期与文号 | `layout/`（`docx_checks` 回读、`render_check` 渲染测量、字体替代检查；`fonts` 字体检查、安装与渲染替代映射；`templates` 公文模板与偏离列表；`dotx` Word 模板；`preview` 渲染预览）；占位字段 | `test_engine_e2e::test_render_check_with_libreoffice`；`test_fonts`；`test_templates`；`test_preview`；FL-14 |
 
 ## 六、四项差异化能力
 
